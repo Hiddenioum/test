@@ -47,7 +47,9 @@ jobs:
 
       - name: Build Telegram Desktop.
         run: |
+          rm -rf build
           mkdir -p build
+          chmod -R 777 build
           docker run --rm \
             -v "$(pwd)":/usr/src/tdesktop \
             -w /usr/src/tdesktop \
