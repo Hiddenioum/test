@@ -285,7 +285,7 @@ diff --git a/Telegram/SourceFiles/main/main_account.cpp b/Telegram/SourceFiles/m
 index dc7ea7247a..9f4bd5f381 100644
 --- a/Telegram/SourceFiles/main/main_account.cpp
 +++ b/Telegram/SourceFiles/main/main_account.cpp
-@@ -258,6 +258,14 @@ void Account::logOut() {
+@@ -258,6:14 @@ void Account::logOut() {
  	_session->logOut();
  }
  
