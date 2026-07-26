@@ -1,16 +1,15 @@
 name: Linux Build Workflow
 
 on:
-  workflow_dispatch:
   push:
     branches:
-      - '**'
+      - main
+  workflow_dispatch:
 
 jobs:
-
-  linux:
-    name: Build Custom Telegram Linux
+  build-linux:
     runs-on: ubuntu-latest
+    name: Build Custom Telegram Linux
 
     env:
       UPLOAD_ARTIFACT: "true"
@@ -30,7 +29,7 @@ jobs:
 
       - name: Apply Custom Features Patch.
         run: |
-          patch -p1 < custom_features.patch
+          git apply --ignore-space-change --ignore-whitespace custom_features.patch || patch -p1 < custom_features.patch
 
       - name: Set up API keys in config.h.
         run: |
@@ -44,36 +43,35 @@ jobs:
       - name: Pull Pre-built Telegram Docker Environment.
         run: |
           docker pull ghcr.io/telegramdesktop/tdesktop/centos_env:latest
-          docker tag ghcr.io/telegramdesktop/tdesktop/centos_env:latest ${{ env.IMAGE_TAG }}
+          docker tag ghcr.io/telegramdesktop/tdesktop/centos_env:latest tdesktop:centos_env
 
       - name: Build Telegram Desktop.
         run: |
-          mkdir -p $RUNNER_TEMP/.tdesktop-cache
+          mkdir -p build
           docker run --rm \
-          -u $(id -u) \
-          -v $PWD:/usr/src/tdesktop \
-          -v $RUNNER_TEMP/.tdesktop-cache:/var/cache/ccache \
-          -e CONFIG=Debug \
-          -e CCACHE_SLOPPINESS=pch_defines,time_macros \
-          $IMAGE_TAG \
-          env -u CCACHE_DISABLE /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
-          -D CMAKE_CONFIGURATION_TYPES=Debug \
-          -D CMAKE_C_FLAGS_DEBUG="-O0 -fpch-preprocess" \
-          -D CMAKE_CXX_FLAGS_DEBUG="-O0 -fpch-preprocess" \
-          -D CMAKE_COMPILE_WARNING_AS_ERROR=OFF \
-          -D TDESKTOP_API_ID=29579556 \
-          -D TDESKTOP_API_HASH=351a588e027c04b1b5a1c2b28cbd9cfd \
-          -D DESKTOP_APP_DISABLE_AUTOUPDATE=OFF \
-          -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF
+            -v "$(pwd)":/usr/src/tdesktop \
+            -w /usr/src/tdesktop \
+            tdesktop:centos_env \
+            bash -c "
+              cd /usr/src/tdesktop/build && \
+              cmake -G Ninja \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DDESKTOP_APP_SPECIAL_TARGET= \
+                -DTDESKTOP_API_ID=29579556 \
+                -DTDESKTOP_API_HASH=351a588e027c04b1b5a1c2b28cbd9cfd \
+                .. && \
+              ninja
+            "
 
       - name: Move artifact.
         run: |
-          cd out/Debug
-          mkdir artifact
-          mv Telegram artifact/
+          mkdir -p bin
+          mv build/bin/Telegram bin/Telegram || mv build/Telegram bin/Telegram
 
       - name: Upload artifact.
         uses: actions/upload-artifact@v4
+        if: env.UPLOAD_ARTIFACT == 'true'
         with:
           name: ${{ env.ARTIFACT_NAME }}
-          path: out/Debug/artifact/
+          path: bin/Telegram
+          if-no-files-found: error
