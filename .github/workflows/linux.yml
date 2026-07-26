@@ -30,9 +30,7 @@ jobs:
 
       - name: Apply Custom Features Patch.
         run: |
-          git config user.name "Javad"
-          git config user.email "javad@local.dev"
-          git apply --3way custom_features.patch || git am --3way < custom_features.patch || git apply --reject --ignore-whitespace custom_features.patch
+          patch -p1 < custom_features.patch
 
       - name: Set up API keys in config.h.
         run: |
