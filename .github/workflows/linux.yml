@@ -27,9 +27,9 @@ jobs:
           cp -r tdesktop-src/.* . 2>/dev/null || true
           rm -rf tdesktop-src
 
-      - name: Apply Custom Features Patch.
+      - name: Apply Custom Features.
         run: |
-          git apply --ignore-space-change --ignore-whitespace custom_features.patch || patch -p1 < custom_features.patch
+          cp -r patched_files/* .
 
       - name: Set up API keys in config.h.
         run: |
