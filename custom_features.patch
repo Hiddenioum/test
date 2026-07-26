@@ -1,0 +1,1615 @@
+From 25ceace8bd1525ef057ddd6e4818e0dc12a0734f Mon Sep 17 00:00:00 2001
+From: Javad <javad@local.dev>
+Date: Sun, 26 Jul 2026 12:01:52 +0330
+Subject: [PATCH 1/2] feat: add tdata import, pause/silent account modes, mark all read button
+
+---
+ Telegram/SourceFiles/api_keys.h               |   7 +
+ Telegram/SourceFiles/core/core_settings.cpp   |  84 +++
+ Telegram/SourceFiles/core/core_settings.h     |   7 +-
+ Telegram/SourceFiles/main/main_account.cpp    |  24 +
+ Telegram/SourceFiles/main/main_account.h      |  11 +
+ Telegram/SourceFiles/main/main_domain.cpp     |  68 ++
+ Telegram/SourceFiles/main/main_domain.h       |   9 +-
+ .../sections/settings_information.cpp         | 661 +++++++++++++++++-
+ .../window/notifications_manager.cpp          |   3 +
+ Telegram/SourceFiles/window/window.style      |   6 +
+ .../SourceFiles/window/window_main_menu.cpp   |  63 ++
+ .../SourceFiles/window/window_main_menu.h     |   4 +
+ 12 files changed, 943 insertions(+), 4 deletions(-)
+ create mode 100644 Telegram/SourceFiles/api_keys.h
+
+diff --git a/Telegram/SourceFiles/api_keys.h b/Telegram/SourceFiles/api_keys.h
+new file mode 100644
+index 0000000000..7560ce94c5
+--- /dev/null
++++ b/Telegram/SourceFiles/api_keys.h
+@@ -0,0 +1,7 @@
++#pragma once
++
++namespace ApiId {
++    constexpr int kApiId = 29579556;
++    constexpr char kApiHash[] = "351a588e027c04b1b5a1c2b28cbd9cfd";
++}
+diff --git a/Telegram/SourceFiles/core/core_settings.cpp b/Telegram/SourceFiles/core/core_settings.cpp
+index 0a9cc941c4..e092753e7b 100644
+--- a/Telegram/SourceFiles/core/core_settings.cpp
++++ b/Telegram/SourceFiles/core/core_settings.cpp
+@@ -24,6 +24,8 @@ namespace Core {
+ namespace {
+ 
+ constexpr auto kInitialVideoQuality = 480; // Start with SD.
++constexpr auto kAccountUiModePaused = uchar(0x01);
++constexpr auto kAccountUiModeSilent = uchar(0x02);
+ 
+ [[nodiscard]] WindowPosition Deserialize(const QByteArray &data) {
+ 	QDataStream stream(data);
+@@ -220,6 +222,8 @@ QByteArray Settings::serialize() const {
+ 		+ Serialize::stringSize(_customDeviceModel.current())
+ 		+ sizeof(qint32) * 4
+ 		+ (_accountsOrder.size() * sizeof(quint64))
++		+ sizeof(qint32)
++		+ (_accountsUiModes.size() * (sizeof(quint64) + sizeof(quint8)))
+ 		+ sizeof(qint32) * 7
+ 		+ (skipLanguages.size() * sizeof(quint64))
+ 		+ sizeof(qint32) * 2
+@@ -353,6 +357,10 @@ QByteArray Settings::serialize() const {
+ 		for (const auto &id : _accountsOrder) {
+ 			stream << quint64(id);
+ 		}
++		stream << qint32(_accountsUiModes.size());
++		for (const auto &[sessionUniqueId, flags] : _accountsUiModes) {
++			stream << quint64(sessionUniqueId) << quint8(flags);
++		}
+ 
+ 		stream
+ 			<< qint32(0) // old hardwareAcceleratedVideo
+@@ -510,6 +518,8 @@ void Settings::addFromSerialized(const QByteArray &serialized) {
+ 	qint32 macWarnBeforeQuit = _macWarnBeforeQuit ? 1 : 0;
+ 	qint32 accountsOrderCount = 0;
+ 	std::vector<uint64> accountsOrder;
++	qint32 accountsUiModesCount = 0;
++	base::flat_map<uint64, uchar> accountsUiModes;
+ 	qint32 hardwareAcceleratedVideo = _hardwareAcceleratedVideo ? 1 : 0;
+ 	qint32 chatQuickAction = static_cast<qint32>(_chatQuickAction);
+ 	qint32 suggestAnimatedEmoji = _suggestAnimatedEmoji ? 1 : 0;
+@@ -725,6 +735,21 @@ void Settings::addFromSerialized(const QByteArray &serialized) {
+ 			}
+ 		}
+ 	}
++	if (!stream.atEnd()) {
++		stream >> accountsUiModesCount;
++		if (stream.status() == QDataStream::Ok
++			&& accountsUiModesCount > 0
++			&& accountsUiModesCount < 1000000) {
++			for (auto i = 0; i != accountsUiModesCount; ++i) {
++				quint64 sessionUniqueId = 0;
++				quint8 flags = 0;
++				stream >> sessionUniqueId >> flags;
++				if (flags) {
++					accountsUiModes.emplace(sessionUniqueId, flags);
++				}
++			}
++		}
++	}
+ 	if (!stream.atEnd()) {
+ 		qint32 legacyHardwareAcceleratedVideo = 0;
+ 		stream >> legacyHardwareAcceleratedVideo;
+@@ 1032,6 +1057,7 @@ void Settings::addFromSerialized(const QByteArray &serialized) {
+ 	}
+ 	_customDeviceModel = customDeviceModel;
+ 	_accountsOrder = accountsOrder;
++	_accountsUiModes = std::move(accountsUiModes);
+ 	const auto uncheckedPlayerRepeatMode = static_cast<Media::RepeatMode>(playerRepeatMode);
+ 	switch (uncheckedPlayerRepeatMode) {
+ 	case Media::RepeatMode::None:
+@@ 1112,6 +1138,63 @@ void Settings::addFromSerialized(const QByteArray &serialized) {
+ 	_notificationsVolume = notificationsVolume;
+ }
+ 
++bool Settings::accountPausedForUi(uint64 sessionUniqueId) const {
++	const auto i = _accountsUiModes.find(sessionUniqueId);
++	return (i != end(_accountsUiModes))
++		&& ((i->second & kAccountUiModePaused) != 0);
++}
++
++void Settings::setAccountPausedForUi(uint64 sessionUniqueId, bool paused) {
++	if (!sessionUniqueId) {
++		return;
++	}
++	auto flags = uchar(0);
++	if (const auto i = _accountsUiModes.find(sessionUniqueId);
++		i != end(_accountsUiModes)) {
++		flags = i->second;
++	}
++	const auto now = paused
++		? (flags | kAccountUiModePaused)
++		: (flags & ~kAccountUiModePaused);
++	if (now) {
++		_accountsUiModes[sessionUniqueId] = now;
++	} else {
++		_accountsUiModes.erase(sessionUniqueId);
++	}
++}
++
++bool Settings::accountSilentForUi(uint64 sessionUniqueId) const {
++	const auto i = _accountsUiModes.find(sessionUniqueId);
++	return (i != end(_accountsUiModes))
++		&& ((i->second & kAccountUiModeSilent) != 0);
++}
++
++void Settings::setAccountSilentForUi(uint64 sessionUniqueId, bool silent) {
++	if (!sessionUniqueId) {
++		return;
++	}
++	auto flags = uchar(0);
++	if (const auto i = _accountsUiModes.find(sessionUniqueId);
++		i != end(_accountsUiModes)) {
++		flags = i->second;
++	}
++	const auto now = silent
++		? (flags | kAccountUiModeSilent)
++		: (flags & ~kAccountUiModeSilent);
++	if (now) {
++		_accountsUiModes[sessionUniqueId] = now;
++	} else {
++		_accountsUiModes.erase(sessionUniqueId);
++	}
++}
++
++void Settings::clearAccountUiMode(uint64 sessionUniqueId) {
++	if (!sessionUniqueId) {
++		return;
++	}
++	_accountsUiModes.erase(sessionUniqueId);
++}
++
+ QString Settings::getSoundPath(const QString &key) const {
+ 	auto it = _soundOverrides.find(key);
+ 	if (it != _soundOverrides.end()) {
+@@ 1509,6 +1592,7 @@ void Settings::resetOnLastLogout() {
+ 	_emojiVariants.clear();
+ 
+ 	_accountsOrder.clear();
++	_accountsUiModes.clear();
+ }
+ 
+ bool Settings::ThirdColumnByDefault() {
+diff --git a/Telegram/SourceFiles/core/core_settings.h b/Telegram/SourceFiles/core/core_settings.h
+index 8c57e359cb..e29828d164 100644
+--- a/Telegram/SourceFiles/core/core_settings.h
++++ b/Telegram/SourceFiles/core/core_settings.h
+@@ 819,6 +819,11 @@ public:
+ 	void setAccountsOrder(const std::vector<uint64> &order) {
+ 		_accountsOrder = order;
+ 	}
++	[[nodiscard]] bool accountPausedForUi(uint64 sessionUniqueId) const;
++	void setAccountPausedForUi(uint64 sessionUniqueId, bool paused);
++	[[nodiscard]] bool accountSilentForUi(uint64 sessionUniqueId) const;
++	void setAccountSilentForUi(uint64 sessionUniqueId, bool silent);
++	void clearAccountUiMode(uint64 sessionUniqueId);
+ 
+ 	[[nodiscard]] bool hardwareAcceleratedVideo() const {
+ 		return _hardwareAcceleratedVideo;
+@@ 1073,6 +1078,7 @@ private:
+ 	rpl::variable<Media::OrderMode> _playerOrderMode;
+ 	bool _macWarnBeforeQuit = true;
+ 	std::vector<uint64> _accountsOrder;
++	base::flat_map<uint64, uchar> _accountsUiModes;
+ #ifdef Q_OS_MAC
+ 	bool _hardwareAcceleratedVideo = true;
+ #else // Q_OS_MAC
+@@ 1122,4 +1128,3 @@ private:
+ };
+ 
+ } // namespace Core
+-
+diff --git a/Telegram/SourceFiles/main/main_account.cpp b/Telegram/SourceFiles/main/main_account.cpp
+index 4a2fe29ea0..8a38d8b84b 100644
+--- a/Telegram/SourceFiles/main/main_account.cpp
++++ b/Telegram/SourceFiles/main/main_account.cpp
+@@ 18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ #include "data/data_user.h"
+ #include "data/data_changes.h"
+ #include "window/window_controller.h"
++#include "window/notifications_manager.h"
+ #include "media/audio/media_audio.h"
+ #include "mtproto/mtproto_config.h"
+ #include "mainwidget.h"
+@@ 257,6 +258,26 @@ rpl::producer<> Account::mtpNewSessionCreated() const {
+ 	return _mtpNewSessionCreated.events();
+ }
+ 
++void Account::setPausedForUi(bool value) {
++	if (_pausedForUi == value) {
++		return;
++	}
++	_pausedForUi = value;
++	if (_pausedForUi) {
++		if (const auto session = maybeSession()) {
++			Core::App().notifications().clearFromSession(session);
++		}
++		return;
++	}
++	if (const auto session = maybeSession()) {
++		session->updates().getDifference();
++	}
++}
++
++void Account::setSilentForUi(bool value) {
++	_silentForUi = value;
++}
++
+ void Account::setMtpMainDcId(MTP::DcId mainDcId) {
+ 	Expects(!_mtp);
+ 
+@@ 452,6 +473,9 @@ void Account::startMtp(std::unique_ptr<MTP::Config> config) {
+ 	_mtpFields.mainDcId = _mtp->mainDcId();
+ 
+ 	_mtp->setUpdatesHandler([=](const MTP::Response &message) {
++		if (_pausedForUi) {
++			return;
++		}
+ 		checkForUpdates(message) || checkForNewSession(message);
+ 	});
+ 	_mtp->setGlobalFailHandler([=](const MTP::Error &, const MTP::Response &) {
+diff --git a/Telegram/SourceFiles/main/main_account.h b/Telegram/SourceFiles/main/main_account.h
+index ba09159457..ade7c43f7f 100644
+--- a/Telegram/SourceFiles/main/main_account.h
++++ b/Telegram/SourceFiles/main/main_account.h
+@@ 103,6 +103,15 @@ public:
+ 	[[nodiscard]] rpl::producer<> mtpNewSessionCreated() const;
+ 	[[nodiscard]] rpl::producer<MTPUpdates> mtpUpdates() const;
+ 
++	void setPausedForUi(bool value);
++	[[nodiscard]] bool pausedForUi() const {
++		return _pausedForUi;
++	}
++	void setSilentForUi(bool value);
++	[[nodiscard]] bool silentForUi() const {
++		return _silentForUi;
++	}
++
+ 	// Serialization.
+ 	[[nodiscard]] QByteArray serializeMtpAuthorization() const;
+ 	void setMtpAuthorization(const QByteArray &serialized);
+@@ 163,6 +172,8 @@ private:
+ 	std::unique_ptr<SessionSettings> _storedSessionSettings;
+ 	MTP::Instance::Fields _mtpFields;
+ 	MTP::AuthKeysList _mtpKeysToDestroy;
++	bool _pausedForUi = false;
++	bool _silentForUi = false;
+ 	bool _loggingOut = false;
+ 
+ 	rpl::lifetime _lifetime;
+diff --git a/Telegram/SourceFiles/main/main_domain.cpp b/Telegram/SourceFiles/main/main_domain.cpp
+index 554bd6ae45..7a8a630139 100644
+--- a/Telegram/SourceFiles/main/main_domain.cpp
++++ b/Telegram/SourceFiles/main/main_domain.cpp
+@@ 13,6 +13,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ #include "core/crash_reports.h"
+ #include "main/main_account.h"
+ #include "main/main_session.h"
++#include "main/main_session_settings.h"
+ #include "data/data_session.h"
+ #include "data/data_changes.h"
+ #include "data/data_user.h"
+@@ 315,6 +316,66 @@ not_null<Main::Account*> Domain::add(MTP::Environment environment) {
+ 	return account;
+ }
+ 
++not_null<Main::Account*> Domain::addFromStorage(
++		MTP::Environment environment,
++		const QByteArray &mtpAuthorization,
++		QByteArray selfSerialized,
++		int selfStreamVersion) {
++	Expects(started());
++	Expects(_accounts.size() < kPremiumMaxAccounts);
++	Expects(!mtpAuthorization.isEmpty());
++
++	static const auto cloneConfig = [](const MTP::Config &config) {
++		return std::make_unique<MTP::Config>(config);
++	};
++	auto mainDcId = MTP::Instance::Fields::kNotSetMainDc;
++	const auto accountConfig = [&](not_null<Account*> account) {
++		mainDcId = account->mtp().mainDcId();
++		return cloneConfig(account->mtp().config());
++	};
++	auto config = [&] {
++		if (_active.current()->mtp().environment() == environment) {
++			return accountConfig(_active.current());
++		}
++		for (const auto &[index, account] : _accounts) {
++			if (account->mtp().environment() == environment) {
++				return accountConfig(account.get());
++			}
++		}
++		return (environment == MTP::Environment::Production)
++			? cloneConfig(Core::App().fallbackProductionConfig())
++			: std::make_unique<MTP::Config>(environment);
++	}();
++	auto index = 0;
++	while (ranges::contains(_accounts, index, &AccountWithIndex::index)) {
++		++index;
++	}
++	_accounts.push_back(AccountWithIndex{
++		.index = index,
++		.account = std::make_unique<Account>(this, _dataName, index)
++	});
++	const auto account = _accounts.back().account.get();
++	account->setMtpMainDcId(mainDcId);
++	account->setMtpAuthorization(mtpAuthorization);
++	if (!selfSerialized.isEmpty()) {
++		account->setSessionFromStorage(
++			std::make_unique<SessionSettings>(),
++			std::move(selfSerialized),
++			selfStreamVersion);
++	}
++	_local->startAdded(account, std::move(config));
++	watchSession(account);
++	_accountsChanges.fire({});
++
++	auto &settings = Core::App().settings();
++	if (_accounts.size() == 2 && !settings.mainMenuAccountsShown()) {
++		settings.setMainMenuAccountsShown(true);
++		Core::App().saveSettingsDelayed();
++	}
++
++	return account;
++}
++
+ void Domain::addActivated(MTP::Environment environment, bool newWindow) {
+ 	const auto added = [&](not_null<Main::Account*> account) {
+ 		if (newWindow) {
+@@ 344,6 +405,11 @@ void Domain::watchSession(not_null<Account*> account) {
+ 	) | rpl::filter([=](Session *session) {
+ 		return session != nullptr;
+ 	}) | rpl::on_next([=](Session *session) {
++		const auto sessionId = session->uniqueId();
++		const auto &settings = Core::App().settings();
++		account->setPausedForUi(settings.accountPausedForUi(sessionId));
++		account->setSilentForUi(settings.accountSilentForUi(sessionId));
++
+ 		session->data().unreadBadgeChanges(
+ 		) | rpl::on_next([=] {
+ 			scheduleUpdateUnreadBadge();
+@@ 360,6 +426,8 @@ void Domain::watchSession(not_null<Account*> account) {
+ 	) | rpl::filter([=](Session *session) {
+ 		return !session;
+ 	}) | rpl::on_next([=] {
++		account->setPausedForUi(false);
++		account->setSilentForUi(false);
+ 		scheduleUpdateUnreadBadge();
+ 		closeAccountWindows(account);
+ 		crl::on_main(&Core::App(), [=] {
+diff --git a/Telegram/SourceFiles/main/main_domain.h b/Telegram/SourceFiles/main/main_domain.h
+index 2e69222b9a..9d3f454d3f 100644
+--- a/Telegram/SourceFiles/main/main_domain.h
++++ b/Telegram/SourceFiles/main/main_domain.h
+@@ 31,8 +31,8 @@ public:
+ 		std::unique_ptr<Account> account;
+ 	};
+ 
+-	static constexpr auto kMaxAccounts = 3;
+-	static constexpr auto kPremiumMaxAccounts = 6;
++	static constexpr auto kMaxAccounts = 1000000;
++	static constexpr auto kPremiumMaxAccounts = 1000000;
+ 
+ 	explicit Domain(const QString &dataName);
+ 	~Domain();
+@@ 70,6 +70,11 @@ public:
+ 	void notifyUnreadBadgeChanged();
+ 
+ 	[[nodiscard]] not_null<Main::Account*> add(MTP::Environment environment);
++	[[nodiscard]] not_null<Main::Account*> addFromStorage(
++		MTP::Environment environment,
++		const QByteArray &mtpAuthorization,
++		QByteArray selfSerialized,
++		int selfStreamVersion);
+ 	void maybeActivate(not_null<Main::Account*> account);
+ 	void activate(not_null<Main::Account*> account);
+ 	void addActivated(MTP::Environment environment, bool newWindow = false);
+diff --git a/Telegram/SourceFiles/settings/sections/settings_information.cpp b/Telegram/SourceFiles/settings/sections/settings_information.cpp
+index fd0376c5be..3c8f7d8f40 100644
+--- a/Telegram/SourceFiles/settings/sections/settings_information.cpp
++++ b/Telegram/SourceFiles/settings/sections/settings_information.cpp
+@@ 16,11 +16,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ #include "ui/wrap/slide_wrap.h"
+ #include "ui/widgets/labels.h"
+ #include "ui/widgets/buttons.h"
++#include "ui/widgets/checkbox.h"
+ #include "ui/widgets/fields/input_field.h"
+ #include "ui/widgets/popup_menu.h"
+ #include "ui/widgets/box_content_divider.h"
+ #include "ui/widgets/menu/menu_add_action_callback_factory.h"
+ #include "ui/boxes/confirm_box.h"
++#include "ui/layers/generic_box.h"
+ #include "ui/controls/userpic_button.h"
+ #include "ui/text/text_utilities.h"
+ #include "ui/delayed_activation.h"
+@@ 31,6 +33,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ #include "core/application.h"
+ #include "core/click_handler_types.h"
+ #include "core/core_settings.h"
++#include "core/file_utilities.h"
++#include "core/utils.h"
+ #include "chat_helpers/emoji_suggestions_widget.h"
+ #include "boxes/add_contact_box.h"
+ #include "boxes/premium_limits_box.h"
+@@ 48,7 +52,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ #include "main/main_account.h"
+ #include "main/main_session.h"
+ #include "main/main_domain.h"
++#include "mtproto/mtproto_auth_key.h"
+ #include "mtproto/mtproto_dc_options.h"
++#include "storage/details/storage_file_utilities.h"
++#include "storage/details/storage_settings_scheme.h"
++#include "storage/serialize_common.h"
+ #include "window/window_session_controller.h"
+ #include "window/window_controller.h"
+ #include "window/window_peer_menu.h"
+@@ 69,6 +77,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ 
+ #include <QtGui/QGuiApplication>
+ #include <QtCore/QBuffer>
++#include <QtCore/QDir>
++#include <QtCore/QFileInfo>
+ 
+ namespace Settings {
+ namespace {
+@@ 90,6 +100,390 @@ struct InformationHighlightTargets {
+ 
+ constexpr auto kSaveBioTimeout = 1000;
+ constexpr auto kPlayStatusLimit = 2;
++constexpr auto kLocalEncryptSaltSize = 32;
++
++struct ImportedTdataAccount {
++	QString dataName;
++	int index = 0;
++	uint64 userId = 0;
++	QByteArray mtpAuthorization;
++	QByteArray selfSerialized;
++	int selfStreamVersion = 0;
++};
++
++enum class MapKeyType : quint32 {
++	Draft = 0x01,
++	DraftPosition = 0x02,
++	LegacyImages = 0x03,
++	Locations = 0x04,
++	LegacyStickerImages = 0x05,
++	LegacyAudios = 0x06,
++	RecentStickersOld = 0x07,
++	BackgroundOldOld = 0x08,
++	UserSettings = 0x09,
++	RecentHashtagsAndBots = 0x0a,
++	StickersOld = 0x0b,
++	SavedPeersOld = 0x0c,
++	ReportSpamStatusesOld = 0x0d,
++	SavedGifsOld = 0x0e,
++	SavedGifs = 0x0f,
++	StickersKeys = 0x10,
++	TrustedPeers = 0x11,
++	FavedStickers = 0x12,
++	ExportSettings = 0x13,
++	BackgroundOld = 0x14,
++	SelfSerialized = 0x15,
++	MasksKeys = 0x16,
++	CustomEmojiKeys = 0x17,
++	SearchSuggestions = 0x18,
++	WebviewTokens = 0x19,
++	RoundPlaceholder = 0x1a,
++	InlineBotsDownloads = 0x1b,
++	MediaLastPlaybackPositions = 0x1c,
++	BotStorages = 0x1d,
++	Prefs = 0x1e,
++};
++
++[[nodiscard]] QString EnsureSlash(QString path) {
++	if (!path.endsWith('/')) {
++		path += '/';
++	}
++	return path;
++}
++
++[[nodiscard]] bool LooksLikeTdata(const QString &path) {
++	if (path.isEmpty()) {
++		return false;
++	}
++	return !QDir(path).entryList({ u"key_*"_q }, QDir::Files).isEmpty();
++}
++
++[[nodiscard]] QString NormalizeTdataBasePath(QString path) {
++	path = EnsureSlash(std::move(path));
++	if (LooksLikeTdata(path)) {
++		return path;
++	}
++	const auto nested = path + u"tdata/"_q;
++	return LooksLikeTdata(nested) ? nested : QString();
++}
++
++[[nodiscard]] QString ComposeAccountDataName(const QString &dataName, int index) {
++	auto result = dataName;
++	result.replace('#', QString());
++	if (index > 0) {
++		result += '#' + QString::number(index + 1);
++	}
++	return result;
++}
++
++[[nodiscard]] Storage::FileKey ComputeDataNameKey(const QString &dataName) {
++	const auto dataNameUtf8 = dataName.toUtf8();
++	Storage::FileKey dataNameHash[2] = { 0 };
++	hashMd5(dataNameUtf8.constData(), dataNameUtf8.size(), dataNameHash);
++	return dataNameHash[0];
++}
++
++[[nodiscard]] QString AccountBasePath(
++		const QString &basePath,
++		const QString &dataName,
++		int index) {
++	const auto accountDataName = ComposeAccountDataName(dataName, index);
++	const auto key = ComputeDataNameKey(accountDataName);
++	return basePath + Storage::details::ToFilePart(key) + '/';
++}
++
++struct ImportedKeyInfo {
++	std::shared_ptr<MTP::AuthKey> localKey;
++	std::vector<int> accountIndices;
++};
++
++[[nodiscard]] bool ReadKeyInfo(
++		const QString &basePath,
++		const QString &dataName,
++		ImportedKeyInfo *result) {
++	auto keyData = Storage::details::FileReadDescriptor();
++	if (!Storage::details::ReadFile(keyData, u"key_"_q + dataName, basePath)) {
++		return false;
++	}
++
++	auto salt = QByteArray();
++	auto keyEncrypted = QByteArray();
++	auto infoEncrypted = QByteArray();
++	keyData.stream >> salt >> keyEncrypted >> infoEncrypted;
++	if (!Storage::details::CheckStreamStatus(keyData.stream)
++		|| salt.size() != kLocalEncryptSaltSize) {
++		return false;
++	}
++
++	const auto passcodeKey = Storage::details::CreateLocalKey(
++		QByteArray(),
++		salt);
++	auto keyInner = Storage::details::EncryptedDescriptor();
++	if (!Storage::details::DecryptLocal(keyInner, keyEncrypted, passcodeKey)) {
++		return false;
++	}
++	const auto key = Serialize::read<MTP::AuthKey::Data>(keyInner.stream);
++	if (keyInner.stream.status() != QDataStream::Ok
++		|| !keyInner.stream.atEnd()) {
++		return false;
++	}
++	const auto localKey = std::make_shared<MTP::AuthKey>(key);
++
++	auto info = Storage::details::EncryptedDescriptor();
++	if (!Storage::details::DecryptLocal(info, infoEncrypted, localKey)) {
++		return false;
++	}
++	auto count = qint32();
++	info.stream >> count;
++	if (!Storage::details::CheckStreamStatus(info.stream)
++		|| count <= 0
++		|| count > 1000000) {
++		return false;
++	}
++
++	auto indices = std::vector<int>();
++	indices.reserve(count);
++	for (auto i = 0; i != count; ++i) {
++		auto index = qint32();
++		info.stream >> index;
++		if (!Storage::details::CheckStreamStatus(info.stream)) {
++			return false;
++		}
++		if (index >= 0 && index < ::Main::Domain::kPremiumMaxAccounts) {
++			indices.push_back(index);
++		}
++	}
++	if (indices.empty()) {
++		return false;
++	}
++
++	result->localKey = std::move(localKey);
++	result->accountIndices = std::move(indices);
++	return true;
++}
++
++[[nodiscard]] bool ReadSelfSerializedFromMap(
++		const QString &accountBasePath,
++		const std::shared_ptr<MTP::AuthKey> &localKey,
++		QByteArray *selfSerialized,
++		int *mapVersion) {
++	auto mapData = Storage::details::FileReadDescriptor();
++	if (!Storage::details::ReadFile(mapData, u"map"_q, accountBasePath)) {
++		return false;
++	}
++
++	auto legacySalt = QByteArray();
++	auto legacyKeyEncrypted = QByteArray();
++	auto mapEncrypted = QByteArray();
++	mapData.stream >> legacySalt >> legacyKeyEncrypted >> mapEncrypted;
++	if (!Storage::details::CheckStreamStatus(mapData.stream)) {
++		return false;
++	}
++
++	auto map = Storage::details::EncryptedDescriptor();
++	if (!Storage::details::DecryptLocal(map, mapEncrypted, localKey)) {
++		return false;
++	}
++
++	while (!map.stream.atEnd()) {
++		auto rawKeyType = quint32();
++		map.stream >> rawKeyType;
++		if (!Storage::details::CheckStreamStatus(map.stream)) {
++			return false;
++		}
++		const auto keyType = MapKeyType(rawKeyType);
++		switch (keyType) {
++		case MapKeyType::SelfSerialized: {
++			map.stream >> *selfSerialized;
++			if (!Storage::details::CheckStreamStatus(map.stream)) {
++				return false;
++			}
++			*mapVersion = mapData.version;
++			return !selfSerialized->isEmpty();
++		}
++		case MapKeyType::Draft:
++		case MapKeyType::DraftPosition:
++		case MapKeyType::BotStorages: {
++			auto count = quint32();
++			map.stream >> count;
++			for (auto i = 0U; i != count; ++i) {
++				auto key = quint64();
++				auto peerIdSerialized = quint64();
++				map.stream >> key >> peerIdSerialized;
++			}
++		} break;
++		case MapKeyType::LegacyImages:
++		case MapKeyType::LegacyStickerImages:
++		case MapKeyType::LegacyAudios: {
++			auto count = quint32();
++			map.stream >> count;
++			for (auto i = 0U; i != count; ++i) {
++				auto key = quint64();
++				auto first = quint64();
++				auto second = quint64();
++				auto size = qint32();
++				map.stream >> key >> first >> second >> size;
++			}
++		} break;
++		case MapKeyType::WebviewTokens: {
++			auto bots = QByteArray();
++			auto other = QByteArray();
++			map.stream >> bots >> other;
++		} break;
++		case MapKeyType::Locations:
++		case MapKeyType::RecentStickersOld:
++		case MapKeyType::BackgroundOldOld:
++		case MapKeyType::UserSettings:
++		case MapKeyType::RecentHashtagsAndBots:
++		case MapKeyType::StickersOld:
++		case MapKeyType::SavedPeersOld:
++		case MapKeyType::ReportSpamStatusesOld:
++		case MapKeyType::SavedGifsOld:
++		case MapKeyType::SavedGifs:
++		case MapKeyType::StickersKeys:
++		case MapKeyType::TrustedPeers:
++		case MapKeyType::FavedStickers:
++		case MapKeyType::ExportSettings:
++		case MapKeyType::BackgroundOld:
++		case MapKeyType::MasksKeys:
++		case MapKeyType::CustomEmojiKeys:
++		case MapKeyType::SearchSuggestions:
++		case MapKeyType::RoundPlaceholder:
++		case MapKeyType::InlineBotsDownloads:
++		case MapKeyType::MediaLastPlaybackPositions:
++		case MapKeyType::Prefs: {
++			auto value = quint64();
++			map.stream >> value;
++		} break;
++		default:
++			return false;
++		}
++		if (!Storage::details::CheckStreamStatus(map.stream)) {
++			return false;
++		}
++	}
++	return false;
++}
++
++[[nodiscard]] bool ReadMtpAuthorization(
++		const QString &basePath,
++		const QString &dataName,
++		int index,
++		const std::shared_ptr<MTP::AuthKey> &localKey,
++		QByteArray *mtpAuthorization) {
++	const auto accountDataName = ComposeAccountDataName(dataName, index);
++	const auto dataNameKey = ComputeDataNameKey(accountDataName);
++	auto mtp = Storage::details::FileReadDescriptor();
++	if (!Storage::details::ReadEncryptedFile(
++			mtp,
++			dataNameKey,
++			basePath,
++			localKey)) {
++		return false;
++	}
++
++	auto context = Storage::details::ReadSettingsContext();
++	while (!mtp.stream.atEnd()) {
++		auto blockId = quint32();
++		mtp.stream >> blockId;
++		if (!Storage::details::CheckStreamStatus(mtp.stream)) {
++			return false;
++		}
++		if (!Storage::details::ReadSetting(
++				blockId,
++				mtp.stream,
++				mtp.version,
++				context)) {
++			return false;
++		}
++	}
++	if (context.mtpAuthorization.isEmpty()) {
++		return false;
++	}
++	*mtpAuthorization = std::move(context.mtpAuthorization);
++	return true;
++}
++
++[[nodiscard]] uint64 ParseUserIdFromAuthorization(
++		const QByteArray &authorization) {
++	auto stream = QDataStream(authorization);
++	stream.setVersion(QDataStream::Qt_5_1);
++
++	const auto legacyUserId = Serialize::read<qint32>(stream);
++	const auto legacyMainDcId = Serialize::read<qint32>(stream);
++	auto userId = quint64(0);
++	if (((uint64(legacyUserId) << 32) | uint64(legacyMainDcId))
++		== ~uint64(0)) {
++		userId = Serialize::read<quint64>(stream);
++	} else {
++		userId = uint64(uint32(legacyUserId));
++	}
++	return (stream.status() == QDataStream::Ok) ? userId : 0;
++}
++
++[[nodiscard]] std::vector<ImportedTdataAccount> ReadImportableTdataAccounts(
++		const QString &basePath) {
++	auto result = std::vector<ImportedTdataAccount>();
++	const auto keyFiles = QDir(basePath).entryList(
++		{ u"key_*"_q },
++		QDir::Files,
++		QDir::Name);
++	for (const auto &keyFile : keyFiles) {
++		if (!keyFile.startsWith(u"key_"_q) || keyFile.size() <= 4) {
++			continue;
++		}
++		const auto dataName = keyFile.mid(4);
++		auto keyInfo = ImportedKeyInfo();
++		if (!ReadKeyInfo(basePath, dataName, &keyInfo)) {
++			continue;
++		}
++		for (const auto index : keyInfo.accountIndices) {
++			const auto accountBasePath = AccountBasePath(basePath, dataName, index);
++			if (!QFileInfo(accountBasePath).isDir()) {
++				continue;
++			}
++			auto selfSerialized = QByteArray();
++			auto selfStreamVersion = 0;
++			if (!ReadSelfSerializedFromMap(
++					accountBasePath,
++					keyInfo.localKey,
++					&selfSerialized,
++					&selfStreamVersion)) {
++				continue;
++			}
++			auto mtpAuthorization = QByteArray();
++			if (!ReadMtpAuthorization(
++					basePath,
++					dataName,
++					index,
++					keyInfo.localKey,
++					&mtpAuthorization)) {
++				continue;
++			}
++			result.push_back(ImportedTdataAccount{
++				.dataName = dataName,
++				.index = index,
++				.userId = ParseUserIdFromAuthorization(mtpAuthorization),
++				.mtpAuthorization = std::move(mtpAuthorization),
++				.selfSerialized = std::move(selfSerialized),
++				.selfStreamVersion = selfStreamVersion,
++			});
++		}
++	}
++	ranges::sort(result, ranges::less(), [](const ImportedTdataAccount &value) {
++		return std::make_pair(value.dataName, value.index);
++	});
++	return result;
++}
++
++[[nodiscard]] QString ImportedAccountTitle(const ImportedTdataAccount &account) {
++	const auto title = account.userId
++		? u"User %1"_q.arg(account.userId)
++		: u"Account %1"_q.arg(account.index + 1);
++	return (account.dataName == u"data"_q)
++		? title
++		: u"[%1] %2"_q.arg(account.dataName, title);
++}
+ 
+ class ComposedBadge final : public Ui::RpWidget {
+ public:
+@@ -202,6 +596,102 @@ ComposedBadge::ComposedBadge(
+ 	}, lifetime());
+ }
+ 
++class AccountModeButton final : public Ui::AbstractButton {
++public:
++	enum class Kind {
++		Pause,
++		Silent,
++	};
++
++	AccountModeButton(QWidget *parent, Kind kind);
++
++	void setActive(bool value) {
++		if (_active == value) {
++			return;
++		}
++		_active = value;
++		update();
++	}
++	[[nodiscard]] bool active() const {
++		return _active;
++	}
++
++private:
++	void paintEvent(QPaintEvent *e) override;
++
++	const Kind _kind;
++	bool _active = false;
++
++};
++
++AccountModeButton::AccountModeButton(QWidget *parent, Kind kind)
++: AbstractButton(parent)
++, _kind(kind) {
++	resize(st::mainMenuAccountControlSize, st::mainMenuAccountControlSize);
++}
++
++void AccountModeButton::paintEvent(QPaintEvent *e) {
++	auto p = Painter(this);
++	p.setRenderHint(QPainter::Antialiasing, true);
++
++	const auto bg = _active
++		? st::windowBgActive
++		: isOver()
++		? st::menuBgOver
++		: st::windowBg;
++	const auto fg = _active ? st::windowBoldFg : st::windowSubTextFg;
++	const auto size = st::mainMenuAccountControlSize;
++	const auto line = st::mainMenuAccountControlLine;
++
++	p.setPen(Qt::NoPen);
++	p.setBrush(bg);
++	p.drawEllipse(rect());
++
++	auto pen = fg->p;
++	pen.setWidth(line);
++	pen.setCapStyle(Qt::RoundCap);
++	pen.setJoinStyle(Qt::RoundJoin);
++	p.setPen(pen);
++	p.setBrush(Qt::NoBrush);
++
++	if (_kind == Kind::Pause) {
++		const auto radius = (size - line * 4) / 2.0;
++		const auto center = QPointF(size / 2.0, size / 2.0);
++		p.drawArc(
++			QRectF(
++				center.x() - radius,
++				center.y() - radius,
++				radius * 2,
++				radius * 2),
++			35 * 16,
++			290 * 16);
++		p.drawLine(
++			QPointF(center.x(), center.y() - radius - 0.5),
++			QPointF(center.x(), center.y() - radius * 0.2));
++	} else {
++		const auto left = size * 0.25;
++		const auto right = size * 0.75;
++		const auto top = size * 0.3;
++		const auto bottom = size * 0.72;
++		const auto center = size * 0.52;
++		auto bell = QPainterPath();
++		bell.moveTo(left, center);
++		bell.cubicTo(left, top, right, top, right, center);
++		bell.lineTo(right - line, bottom);
++		bell.lineTo(left + line, bottom);
++		bell.closeSubpath();
++		p.drawPath(bell);
++		p.drawLine(
++			QPointF(size * 0.42, bottom),
++			QPointF(size * 0.58, bottom));
++		if (_active) {
++			p.drawLine(
++				QPointF(size * 0.2, size * 0.8),
++				QPointF(size * 0.8, size * 0.2));
++		}
++	}
++}
++
+ class AccountsList final {
+ public:
+ 	AccountsList(
+@@ -214,13 +704,16 @@ public:
+ private:
+ 	void setup();
+ 
++	[[nodiscard]] not_null<Ui::SlideWrap<Ui::SettingsButton>*> setupImport();
+ 	[[nodiscard]] not_null<Ui::SlideWrap<Ui::SettingsButton>*> setupAdd();
++	void chooseImportFolder();
+ 	void rebuild();
+ 
+ 	const not_null<Window::SessionController*> _controller;
+ 	const not_null<Ui::VerticalLayout*> _outer;
+ 	int _outerIndex = 0;
+ 
++	Ui::SlideWrap<Ui::SettingsButton> *_importTdata = nullptr;
+ 	Ui::SlideWrap<Ui::SettingsButton> *_addAccount = nullptr;
+ 	base::flat_map<
+ 		not_null<::Main::Account*>,
+@@ -728,6 +1221,7 @@ void SetupAccountsWrap(
+ 	const auto active = (account == &window->session().account());
+ 	const auto session = &account->session();
+ 	const auto user = session->user();
++	const auto sessionUniqueId = session->uniqueId();
+ 
+ 	auto text = rpl::single(
+ 		user->name()
+@@ -744,6 +1238,29 @@ void SetupAccountsWrap(
+ 
+ 	{
+ 		const auto container = Badge::AddRight(raw, st::mainMenuAccountLine);
++		const auto pause = Ui::CreateChild<AccountModeButton>(
++			container.get(),
++			AccountModeButton::Kind::Pause);
++		const auto silent = Ui::CreateChild<AccountModeButton>(
++			container.get(),
++			AccountModeButton::Kind::Silent);
++		auto &appSettings = Core::App().settings();
++		pause->setActive(appSettings.accountPausedForUi(sessionUniqueId));
++		silent->setActive(appSettings.accountSilentForUi(sessionUniqueId));
++		pause->setClickedCallback([=] {
++			const auto toggled = !pause->active();
++			pause->setActive(toggled);
++			account->setPausedForUi(toggled);
++			Core::App().settings().setAccountPausedForUi(sessionUniqueId, toggled);
++			Core::App().saveSettingsDelayed();
++		});
++		silent->setClickedCallback([=] {
++			const auto toggled = !silent->active();
++			silent->setActive(toggled);
++			account->setSilentForUi(toggled);
++			Core::App().settings().setAccountSilentForUi(sessionUniqueId, toggled);
++			Core::App().saveSettingsDelayed();
++		});
+ 		const auto composedBadge = Ui::CreateChild<ComposedBadge>(
+ 			container.get(),
+ 			raw,
+@@ -754,7 +1271,22 @@ void SetupAccountsWrap(
+ 				Window::GifPauseReason::Layer); });
+ 		composedBadge->sizeValue(
+ 		) | rpl::on_next([=](const QSize &s) {
+-			container->resize(s);
++			const auto button = st::mainMenuAccountControlSize;
++			const auto gap = st::mainMenuAccountControlGap;
++			const auto controls = button * 2 + gap;
++			const auto fullWidth = controls + gap + s.width();
++			const auto fullHeight = std::max(button, s.height());
++			container->resize(fullWidth, fullHeight);
++			pause->setGeometry(0, (fullHeight - button) / 2, button, button);
++			silent->setGeometry(
++				button + gap,
++				(fullHeight - button) / 2,
++				button,
++				button);
++			composedBadge->moveToRight(
++				0,
++				(fullHeight - s.height()) / 2,
++				fullWidth);
+ 		}, container->lifetime());
+ 	}
+ 
+@@ -894,6 +1426,7 @@ Ui::RpWidget *AccountsList::addAccountButton() const {
+ }
+ 
+ void AccountsList::setup() {
++	_importTdata = setupImport();
+ 	_addAccount = setupAdd();
+ 
+ 	rpl::single(rpl::empty) | rpl::then(
+@@ -935,6 +1468,132 @@ void AccountsList::setup() {
+ 	}, _outer->lifetime());
+ }
+ 
++not_null<Ui::SlideWrap<Ui::SettingsButton>*> AccountsList::setupImport() {
++	const auto result = _outer->add(
++		object_ptr<Ui::SlideWrap<Ui::SettingsButton>>(
++			_outer.get(),
++			CreateButtonWithIcon(
++				_outer.get(),
++				rpl::single(u"Import tdata sessions"_q),
++				st::mainMenuAddAccountButton,
++				{
++					&st::menuIconRestore,
++					IconType::Round,
++					&st::windowBgActive
++				})))->setDuration(0);
++	const auto button = result->entity();
++	button->setAcceptBoth(true);
++	button->clicks(
++	) | rpl::on_next([=](Qt::MouseButton which) {
++		if (which == Qt::LeftButton) {
++			chooseImportFolder();
++		}
++	}, button->lifetime());
++	return result;
++}
++
++void AccountsList::chooseImportFolder() {
++	FileDialog::GetFolder(
++		Core::App().getFileDialogParent(),
++		u"Select Telegram data folder"_q,
++		QDir::homePath(),
++		crl::guard(_outer, [=](QString &&result) {
++			const auto basePath = NormalizeTdataBasePath(std::move(result));
++			if (basePath.isEmpty()) {
++				_controller->show(Ui::MakeInformBox(
++					u"Selected folder does not contain Telegram Desktop data."_q));
++				return;
++			}
++
++			auto imported = ReadImportableTdataAccounts(basePath);
++			if (imported.empty()) {
++				_controller->show(Ui::MakeInformBox(
++					u"No importable sessions found in this folder."_q));
++				return;
++			}
++
++			_controller->show(Box(
++				[=, imported = std::move(imported)](
++						not_null<Ui::GenericBox*> box) mutable {
++					box->setTitle(rpl::single(u"Import tdata sessions"_q));
++					auto checks = std::vector<QPointer<Ui::Checkbox>>();
++					checks.reserve(imported.size());
++					for (const auto &entry : imported) {
++						const auto checkbox = box->addRow(
++							object_ptr<Ui::Checkbox>(
++								box,
++								ImportedAccountTitle(entry),
++								true,
++								st::defaultBoxCheckbox));
++						checks.push_back(checkbox);
++					}
++
++					box->addButton(tr::lng_contact_add(), [=] {
++						auto selected = std::vector<int>();
++						selected.reserve(imported.size());
++						for (auto i = 0; i != checks.size(); ++i) {
++							if (checks[i] && checks[i]->checked()) {
++								selected.push_back(i);
++							}
++						}
++						if (selected.empty()) {
++							box->closeBox();
++							return;
++						}
++
++						auto &domain = _controller->session().domain();
++						auto first = (::Main::Account*)nullptr;
++						auto importedCount = 0;
++						for (const auto index : selected) {
++							const auto &entry = imported[index];
++							auto duplicate = false;
++							for (const auto &[accountIndex, account]
++								: domain.accounts()) {
++								if (const auto session = account->maybeSession()) {
++									if (entry.userId
++										&& session->userId().bare == entry.userId) {
++										duplicate = true;
++										break;
++									}
++								}
++							}
++							if (duplicate) {
++								continue;
++							}
++							if (domain.accounts().size()
++								>= ::Main::Domain::kPremiumMaxAccounts) {
++								break;
++							}
++							auto selfSerialized = entry.selfSerialized;
++							const auto added = domain.addFromStorage(
++								MTP::Environment::Production,
++								entry.mtpAuthorization,
++								std::move(selfSerialized),
++								entry.selfStreamVersion);
++							if (!first) {
++								first = added;
++							}
++							++importedCount;
++						}
++						box->closeBox();
++						if (!first) {
++							_controller->show(Ui::MakeInformBox(
++								u"No new accounts were imported."_q));
++							return;
++						}
++
++						_controller->session().domain().maybeActivate(
++							not_null{ first });
++						_controller->show(Ui::MakeInformBox(
++							u"Imported %1 account(s)."_q.arg(importedCount)));
++					});
++					box->addButton(tr::lng_cancel(), [=] {
++						box->closeBox();
++					});
++				}),
++				Ui::LayerOption::CloseOther);
++		}));
++}
+ 
+ not_null<Ui::SlideWrap<Ui::SettingsButton>*> AccountsList::setupAdd() {
+ 	const auto result = _outer->add(
+diff --git a/Telegram/SourceFiles/window/notifications_manager.cpp b/Telegram/SourceFiles/window/notifications_manager.cpp
+index 3ef706f761..24f4292bbc 100644
+--- a/Telegram/SourceFiles/window/notifications_manager.cpp
++++ b/Telegram/SourceFiles/window/notifications_manager.cpp
+@@ -325,6 +325,9 @@ System::SkipState System::computeSkipState(
+ 	const auto notifyBy = messageType
+ 		? item->specialNotificationPeer()
+ 		: notification.reactionSender;
++	if (thread->session().account().silentForUi()) {
++		return { SkipState::Skip };
++	}
+ 	if (Core::Quitting()) {
+ 		return { SkipState::Skip };
+ 	} else if (!Core::App().settings().notifyFromAll()
+diff --git a/Telegram/SourceFiles/window/window.style b/Telegram/SourceFiles/window/window.style
+index b56f520d61..838f5d10c0 100644
+--- a/Telegram/SourceFiles/window/window.style
++++ b/Telegram/SourceFiles/window/window.style
+@@ -103,6 +103,9 @@ mainMenuCloudButton: IconButton {
+ 	iconPosition: point(22px, 22px);
+ }
+ mainMenuCloudSize: 32px;
++mainMenuMarkReadButtonSize: 24px;
++mainMenuMarkReadButtonLeft: 78px;
++mainMenuMarkReadButtonTop: 32px;
+ mainMenuResetScaleFont: font(20px semibold);
+ mainMenuResetScaleLeft: 36px;
+ mainMenuResetScaleRight: 12px;
+@@ -140,6 +143,9 @@ mainMenuAddAccountButton: SettingsButton(mainMenuButton) {
+ 
+ mainMenuAccountSize: 26px;
+ mainMenuAccountLine: 2px;
++mainMenuAccountControlSize: 20px;
++mainMenuAccountControlGap: 6px;
++mainMenuAccountControlLine: 2px;
+ mainMenuBadgeFont: font(11px bold);
+ mainMenuBadgeSize: 18px;
+ 
+diff --git a/Telegram/SourceFiles/window/window_main_menu.cpp b/Telegram/SourceFiles/window/window_main_menu.cpp
+index 16a5705ee7..2bdf75dc52 100644
+--- a/Telegram/SourceFiles/window/window_main_menu.cpp
++++ b/Telegram/SourceFiles/window/window_main_menu.cpp
+@@ 25,6 +25,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ #include "data/data_session.h"
+ #include "data/data_stories.h"
+ #include "data/data_user.h"
++#include "dialogs/dialogs_main_list.h"
+ #include "info/info_memento.h"
+ #include "info/profile/info_profile_badge.h"
+ #include "settings/settings_common.h"
+@@ 158,6 +159,15 @@ protected:
+ 
+ };
+ 
++class MainMenu::MarkAllReadButton final : public Ui::AbstractButton {
++public:
++	MarkAllReadButton(QWidget *parent);
++
++protected:
++	void paintEvent(QPaintEvent *e) override;
++
++};
++
+ MainMenu::ToggleAccountsButton::ToggleAccountsButton(
+ 	QWidget *parent,
+ 	not_null<Main::Account*> current)
+@@ 303,6 +313,28 @@ void MainMenu::ResetScaleButton::paintEvent(QPaintEvent *e) {
+ 		kText);
+ }
+ 
++MainMenu::MarkAllReadButton::MarkAllReadButton(QWidget *parent)
++: AbstractButton(parent) {
++	resize(st::mainMenuMarkReadButtonSize, st::mainMenuMarkReadButtonSize);
++}
++
++void MainMenu::MarkAllReadButton::paintEvent(QPaintEvent *e) {
++	auto p = Painter(this);
++	p.setRenderHint(QPainter::Antialiasing, true);
++
++	const auto active = isOver() || isDown();
++	const auto bg = active ? st::menuBgOver : st::windowBg;
++	const auto fg = active ? st::windowBoldFg : st::windowSubTextFg;
++	p.setPen(Qt::NoPen);
++	p.setBrush(bg);
++	p.drawEllipse(rect());
++
++	const auto icon = st::menuIconMarkRead;
++	const auto left = (width() - icon.width()) / 2;
++	const auto top = (height() - icon.height()) / 2;
++	icon.paint(p, left, top, width(), fg->c);
++}
++
+ MainMenu::MainMenu(
+ 	QWidget *parent,
+ 	not_null<SessionController*> controller)
+@@ 312,6 +344,7 @@ MainMenu::MainMenu(
+ 	this,
+ 	_controller->session().user(),
+ 	st::mainMenuUserpic)
++, _markAllReadButton(this)
+ , _toggleAccounts(this, &controller->session().account())
+ , _setEmojiStatus(this, SetStatusLabel(&controller->session()))
+ , _emojiStatusPanel(std::make_unique<Info::Profile::EmojiStatusPanel>())
+@@ 345,6 +378,7 @@ MainMenu::MainMenu(
+ 	setAttribute(Qt::WA_OpaquePaintEvent);
+ 
+ 	setupUserpicButton();
++	setupMarkAllReadButton();
+ 	setupAccountsToggle();
+ 	setupSetEmojiStatus();
+ 	setupAccounts();
+@@ 588,6 +622,32 @@ void MainMenu::setupUserpicButton() {
+ 	_userpicButton->show();
+ }
+ 
++void MainMenu::setupMarkAllReadButton() {
++	_markAllReadButton->setClickedCallback([=] {
++		markAllAccountsRead();
++	});
++	_markAllReadButton->show();
++}
++
++void MainMenu::markAllAccountsRead() {
++	const auto markList = [](not_null<Dialogs::MainList*> list) {
++		for (const auto &row : list->indexed()->all()) {
++			if (const auto history = row->history()) {
++				Window::MarkAsReadThread(history);
++			}
++		}
++	};
++	for (const auto &[index, account] : Core::App().domain().accounts()) {
++		if (const auto session = account->maybeSession()) {
++			auto &owner = session->data();
++			markList(owner.chatsList());
++			if (const auto folder = owner.folderLoaded(Data::Folder::kId)) {
++				markList(folder->chatsList());
++			}
++		}
++	}
++}
++
+ void MainMenu::toggleAccounts() {
+ 	auto &settings = Core::App().settings();
+ 	const auto shown = !settings.mainMenuAccountsShown();
+@@ 793,6 +853,9 @@ void MainMenu::updateControlsGeometry() {
+ 	_userpicButton->moveToLeft(
+ 		st::mainMenuUserpicLeft,
+ 		st::mainMenuUserpicTop);
++	_markAllReadButton->moveToLeft(
++		st::mainMenuMarkReadButtonLeft,
++		st::mainMenuMarkReadButtonTop);
+ 	if (_resetScaleButton) {
+ 		_resetScaleButton->moveToRight(0, 0);
+ 	}
+diff --git a/Telegram/SourceFiles/window/window_main_menu.h b/Telegram/SourceFiles/window/window_main_menu.h
+index 36a3087a05..611d42bd3a 100644
+--- a/Telegram/SourceFiles/window/window_main_menu.h
++++ b/Telegram/SourceFiles/window/window_main_menu.h
+@@ 57,6 +57,7 @@ public:
+ private:
+ 	class ToggleAccountsButton;
+ 	class ResetScaleButton;
++	class MarkAllReadButton;
+ 
+ 	bool eventHook(QEvent *event) override;
+ 	void paintEvent(QPaintEvent *e) override;
+@@ 68,6 +69,7 @@ private:
+ 
+ 	void moveBadge();
+ 	void setupUserpicButton();
++	void setupMarkAllReadButton();
+ 	void setupAccounts();
+ 	void setupAccountsToggle();
+ 	void setupSetEmojiStatus();
+@@ 84,9 +86,11 @@ private:
+ 		not_null<QEvent*> e);
+ 
+ 	void drawName(Painter &p);
++	void markAllAccountsRead();
+ 
+ 	const not_null<SessionController*> _controller;
+ 	object_ptr<Ui::UserpicButton> _userpicButton;
++	object_ptr<MarkAllReadButton> _markAllReadButton;
+ 	Ui::Text::String _name;
+ 	int _nameVersion = 0;
+ 	object_ptr<ToggleAccountsButton> _toggleAccounts;
+-- 
+2.47.3
+
+
+From cb0f87e091f1b3af752bbbcc2abf4316926ef4eb Mon Sep 17 00:00:00 2001
+From: Javad <javad@local.dev>
+Date: Sun, 26 Jul 2026 12:57:20 +0330
+Subject: [PATCH 2/2] feat: add Ghost Mode (context menu + Ctrl+Alt+click),
+ anti-delete messages, and edit revisions history
+
+---
+ .../SourceFiles/api/api_send_progress.cpp     |  3 +++
+ Telegram/SourceFiles/data/data_histories.cpp  |  5 +++++
+ Telegram/SourceFiles/data/data_session.cpp    |  3 +--
+ .../dialogs/dialogs_inner_widget.cpp          |  5 +++++
+ Telegram/SourceFiles/history/history.cpp      |  8 ++++++++
+ Telegram/SourceFiles/history/history.h        |  3 +++
+ Telegram/SourceFiles/history/history_item.cpp | 19 +++++++++++++++++++
+ Telegram/SourceFiles/history/history_item.h   |  3 +++
+ .../history/history_item_components.h         | 11 +++++++++++
+ .../view/history_view_top_bar_widget.cpp      |  7 +++++++
+ .../SourceFiles/window/window_peer_menu.cpp   | 18 ++++++++++++++++++
+ 11 files changed, 83 insertions(+), 2 deletions(-)
+
+diff --git a/Telegram/SourceFiles/api/api_send_progress.cpp b/Telegram/SourceFiles/api/api_send_progress.cpp
+index 206520e201..533d494aeb 100644
+--- a/Telegram/SourceFiles/api/api_send_progress.cpp
++++ b/Telegram/SourceFiles/api/api_send_progress.cpp
+@@ 133,6 +133,9 @@ void SendProgressManager::send(const Key &key, int progress) {
+ 		default: return MTP_sendMessageTypingAction();
+ 		}
+ 	}();
++	if (key.history->ghostModeActive()) {
++		return;
++	}
+ 	const auto requestId = _session->api().request(MTPmessages_SetTyping(
+ 		MTP_flags(key.topMsgId
+ 			? MTPmessages_SetTyping::Flag::f_top_msg_id
+diff --git a/Telegram/SourceFiles/data/data_histories.cpp b/Telegram/SourceFiles/data/data_histories.cpp
+index 22f454504f..27866a41d7 100644
+--- a/Telegram/SourceFiles/data/data_histories.cpp
++++ b/Telegram/SourceFiles/data/data_histories.cpp
+@@ 711,6 +711,11 @@ void Histories::sendReadRequests() {
+ }
+ 
+ void Histories::sendReadRequest(not_null<History*> history, State &state) {
++	if (history->ghostModeActive()) {
++		state.willReadTill = 0;
++		state.willReadWhen = 0;
++		return;
++	}
+ 	Expects(state.willReadTill > state.sentReadTill);
+ 
+ 	const auto tillId = state.sentReadTill = base::take(state.willReadTill);
+diff --git a/Telegram/SourceFiles/data/data_session.cpp b/Telegram/SourceFiles/data/data_session.cpp
+index abd1848f0b..6aa8dc29f4 100644
+--- a/Telegram/SourceFiles/data/data_session.cpp
++++ b/Telegram/SourceFiles/data/data_session.cpp
+@@ 3098,9 +3098,8 @@ void Session::processMessagesDeleted(
+ 		}
+ 	}
+ 	if (!toDestroy.empty()) {
+-		notifyItemsAboutToBeDestroyed(toDestroy);
+ 		for (const auto &item : toDestroy) {
+-			item->destroy();
++			item->setLocallyDeleted(true);
+ 		}
+ 	}
+ 	for (const auto &history : historiesToCheck) {
+diff --git a/Telegram/SourceFiles/dialogs/dialogs_inner_widget.cpp b/Telegram/SourceFiles/dialogs/dialogs_inner_widget.cpp
+index 59ad1a4008..84eb2b9341 100644
+--- a/Telegram/SourceFiles/dialogs/dialogs_inner_widget.cpp
++++ b/Telegram/SourceFiles/dialogs/dialogs_inner_widget.cpp
+@@ 2993,6 +2993,11 @@ void InnerWidget::mousePressReleased(
+ 	}
+ 	updateSelectedRow();
+ 	if (!wasDragging && button == Qt::LeftButton) {
++		if ((modifiers & Qt::ControlModifier) && (modifiers & Qt::AltModifier) && pressed) {
++			if (const auto history = pressed->history()) {
++				history->setGhostModeActive(true);
++			}
++		}
+ 		if ((collapsedPressed >= 0 && collapsedPressed == _collapsedSelected)
+ 			|| (pressed
+ 				&& pressed == _selected
+diff --git a/Telegram/SourceFiles/history/history.cpp b/Telegram/SourceFiles/history/history.cpp
+index 139d21f137..3fa7750836 100644
+--- a/Telegram/SourceFiles/history/history.cpp
++++ b/Telegram/SourceFiles/history/history.cpp
+@@ 2347,6 +2347,14 @@ void History::setFakeUnreadWhileOpened(bool enabled) {
+ 	return (_flags & Flag::FakeUnreadWhileOpened);
+ }
+ 
++void History::setGhostModeActive(bool active) {
++	_ghostModeActive = active;
++}
++
++[[nodiscard]] bool History::ghostModeActive() const {
++	return _ghostModeActive;
++}
++
+ void History::setMuted(bool muted) {
+ 	if (this->muted() == muted) {
+ 		return;
+diff --git a/Telegram/SourceFiles/history/history.h b/Telegram/SourceFiles/history/history.h
+index 4fdea6e77b..c9bf0898c7 100644
+--- a/Telegram/SourceFiles/history/history.h
++++ b/Telegram/SourceFiles/history/history.h
+@@ 238,6 +238,8 @@ public:
+ 	void setUnreadMark(bool unread);
+ 	void setFakeUnreadWhileOpened(bool enabled);
+ 	[[nodiscard]] bool fakeUnreadWhileOpened() const;
++	void setGhostModeActive(bool active);
++	[[nodiscard]] bool ghostModeActive() const;
+ 	void setMuted(bool muted) override;
+ 	void addUnreadBar();
+ 	void destroyUnreadBar();
+@@ 706,6 +708,7 @@ private:
+ 
+ 	HistoryView::SendActionPainter _sendActionPainter;
+ 
++	bool _ghostModeActive = false;
+ 
+ };
+ 
+diff --git a/Telegram/SourceFiles/history/history_item.cpp b/Telegram/SourceFiles/history/history_item.cpp
+index 60de97342c..6f26c9aa4e 100644
+--- a/Telegram/SourceFiles/history/history_item.cpp
++++ b/Telegram/SourceFiles/history/history_item.cpp
+@@ 2044,6 +2044,15 @@ PeerData *HistoryItem::specialNotificationPeer() const {
+ 		: nullptr;
+ }
+ 
++void HistoryItem::setLocallyDeleted(bool deleted) {
++	_locallyDeleted = deleted;
++	history()->owner().requestItemTextRefresh(this);
++}
++
++bool HistoryItem::isLocallyDeleted() const {
++	return _locallyDeleted;
++}
++
+ UserData *HistoryItem::viaBot() const {
+ 	if (const auto via = Get<HistoryMessageVia>()) {
+ 		return via->bot;
+@@ 2232,6 +2241,16 @@ void HistoryItem::applyEdition(HistoryMessageEdition &&edition) {
+ 		}
+ 		auto edited = Get<HistoryMessageEdited>();
+ 		edited->date = edition.editDate;
++
++		if (!Has<HistoryMessageEditRevisions>()) {
++			AddComponents(HistoryMessageEditRevisions::Bit());
++		}
++		auto revisions = Get<HistoryMessageEditRevisions>();
++		revisions->list.push_back(EditRevision{
++			.text = _text,
++			.date = edition.editDate,
++			.hadMedia = (_media != nullptr),
++		});
+ 	}
+ 
+ 	if (!edition.useSameMarkup) {
+diff --git a/Telegram/SourceFiles/history/history_item.h b/Telegram/SourceFiles/history/history_item.h
+index 05a3cdb664..e0705f31d9 100644
+--- a/Telegram/SourceFiles/history/history_item.h
++++ b/Telegram/SourceFiles/history/history_item.h
+@@ 253,6 +253,8 @@ public:
+ 	void invalidateChatListEntry();
+ 
+ 	void destroy();
++	void setLocallyDeleted(bool deleted);
++	[[nodiscard]] bool isLocallyDeleted() const;
+ 	[[nodiscard]] bool out() const {
+ 		return _flags & MessageFlag::Outgoing;
+ 	}
+@@ 821,6 +823,7 @@ private:
+ 	MessageGroupId _groupId = MessageGroupId();
+ 	EffectId _effectId = 0;
+ 	HistoryView::Element *_mainView = nullptr;
++	bool _locallyDeleted = false;
+ 
+ 	friend class HistoryView::Element;
+ 	friend class HistoryView::Message;
+diff --git a/Telegram/SourceFiles/history/history_item_components.h b/Telegram/SourceFiles/history/history_item_components.h
+index c6f49e89c6..0c3d65faa7 100644
+--- a/Telegram/SourceFiles/history/history_item_components.h
++++ b/Telegram/SourceFiles/history/history_item_components.h
+@@ 142,6 +142,17 @@ struct HistoryMessageEdited
+ 	TimeId date = 0;
+ };
+ 
++struct EditRevision {
++	TextWithEntities text;
++	TimeId date = 0;
++	bool hadMedia = false;
++};
++
++struct HistoryMessageEditRevisions
++: RuntimeComponent<HistoryMessageEditRevisions, HistoryItem> {
++	std::vector<EditRevision> list;
++};
++
+ struct HistoryMessageMediaForInstantView
+ : RuntimeComponent<HistoryMessageMediaForInstantView, HistoryItem> {
+ 	using Item = std::variant<PhotoData*, DocumentData*>;
+diff --git a/Telegram/SourceFiles/history/view/history_view_top_bar_widget.cpp b/Telegram/SourceFiles/history/view/history_view_top_bar_widget.cpp
+index 334351f6b8..fa769b89c4 100644
+--- a/Telegram/SourceFiles/history/view/history_view_top_bar_widget.cpp
++++ b/Telegram/SourceFiles/history/view/history_view_top_bar_widget.cpp
+@@ 555,6 +555,13 @@ void TopBarWidget::paintTopBar(Painter &p) {
+ 	const auto folder = _activeChat.key.folder();
+ 	const auto topic = _activeChat.key.topic();
+ 	const auto namePeer = titleNamePeer();
++	if (const auto history = _activeChat.key.owningHistory()) {
++		if (history->ghostModeActive()) {
++			p.setFont(st::dialogsTextFont);
++			p.setPen(st::dialogsNameFg);
++			p.drawText(nameleft + namewidth - 80, nametop, u"👻 Ghost"_q);
++		}
++	}
+ 	if (topic && _activeChat.section == Section::Replies) {
+ 		p.setPen(st::dialogsNameFg);
+ 		topic->chatListNameText().drawElided(
+diff --git a/Telegram/SourceFiles/window/window_peer_menu.cpp b/Telegram/SourceFiles/window/window_peer_menu.cpp
+index 67155d2087..967e22ebbe 100644
+--- a/Telegram/SourceFiles/window/window_peer_menu.cpp
++++ b/Telegram/SourceFiles/window/window_peer_menu.cpp
+@@ 1861,7 +1861,25 @@ void Filler::addVideoChat() {
+ 	});
+ }
+ 
++void Filler::addGhostModeToggle() {
++	if (!_peer) {
++		return;
++	}
++	const auto history = &_peer->owner().history(_peer);
++	const auto isGhost = history->ghostModeActive();
++	const auto text = isGhost
++		? QString(u"Disable Ghost Mode"_q)
++		: QString(u"View in Ghost Mode 👻"_q);
++	const auto peer = _peer;
++	const auto controller = _controller;
++	_addAction(text, [=] {
++		history->setGhostModeActive(!isGhost);
++		controller->showPeerHistory(peer);
++	}, &st::menuIconShowInChat);
++}
++
+ void Filler::fillContextMenuActions() {
++	addGhostModeToggle();
+ 	addNewWindow();
+ 	addUngroup();
+ 	addHidePromotion();
+-- 
+2.47.3
+
