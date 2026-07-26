@@ -16,89 +16,81 @@ diff --git a/Telegram/SourceFiles/core/core_settings.cpp b/Telegram/SourceFiles/
 index d65ef67651..be2eb8a673 100644
 --- a/Telegram/SourceFiles/core/core_settings.cpp
 +++ b/Telegram/SourceFiles/core/core_settings.cpp
-@@ -353,6 +353,14 @@ void Settings::setUnreadMark(bool unread) {
- 	_unreadMark = unread;
- }
-
-+void Settings::setPausedForUi(bool paused) {
-+	_pausedForUi = paused;
-+}
-
-+void Settings::setSilentForUi(bool silent) {
-+	_silentForUi = silent;
-+}
-
- void Settings::setMuteAll(bool mute) {
- 	_muteAll = mute;
- }
-@@ -514,6 +522,14 @@ bool Settings::unreadMark() const {
- 	return _unreadMark;
- }
-
-+bool Settings::pausedForUi() const {
-+	return _pausedForUi;
-+}
-
-+bool Settings::silentForUi() const {
-+	return _silentForUi;
-+}
-
- bool Settings::muteAll() const {
- 	return _muteAll;
- }
-@@ -1053,6 +1069,8 @@ QByteArray Settings::serialize() const {
- 	| (1 << 30) // unread mark
- 	| (1 << 31) // mute all
- 	;
-+	stream << qint32(_pausedForUi ? 1 : 0);
-+	stream << qint32(_silentForUi ? 1 : 0);
-
- 	return result;
- }
-@@ -1446,6 +1464,12 @@ bool Settings::readSetting(
- 		stream >> value;
- 		_muteAll = (value != 0);
- 		return true;
-+	} else if (blockId == 32) {
-+		stream >> value;
-+		_pausedForUi = (value != 0);
-+		stream >> value;
-+		_silentForUi = (value != 0);
-+		return true;
+@@ -453,6 +453,10 @@ QByteArray Settings::serialize() const {
+ 			stream << quint64(sessionUniqueId) << quint8(flags);
+ 		}
+ 
+ 		stream
+ 			<< qint32(0) // old hardwareAcceleratedVideo
+@@ -624,6 +628,8 @@ void Settings::addFromSerialized(const QByteArray &serialized) {
+ 	qint32 macWarnBeforeQuit = _macWarnBeforeQuit ? 1 : 0;
+ 	qint32 accountsOrderCount = 0;
+ 	std::vector<uint64> accountsOrder;
++	qint32 accountsUiModesCount = 0;
++	base::flat_map<uint64, uchar> accountsUiModes;
+ 	qint32 hardwareAcceleratedVideo = _hardwareAcceleratedVideo ? 1 : 0;
+ 	qint32 chatQuickAction = static_cast<qint32>(_chatQuickAction);
+ 	qint32 suggestAnimatedEmoji = _suggestAnimatedEmoji ? 1 : 0;
+@@ -847,6 +853,21 @@ void Settings::addFromSerialized(const QByteArray &serialized) {
+ 			}
+ 		}
  	}
- 	return false;
++	if (!stream.atEnd()) {
++		stream >> accountsUiModesCount;
++		if (stream.status() == QDataStream::Ok
++			&& accountsUiModesCount > 0
++			&& accountsUiModesCount < 100) {
++			for (auto i = 0; i != accountsUiModesCount; ++i) {
++				auto sessionUniqueId = uint64(0);
++				auto flags = uchar(0);
++				stream >> sessionUniqueId >> flags;
++				if (stream.status() == QDataStream::Ok) {
++					accountsUiModes[sessionUniqueId] = flags;
++				}
++			}
++		}
++	}
+ }
+
+ void Settings::addFromSerialized(const QByteArray &serialized) {
+@@ -1210,6 +1231,7 @@ void Settings::addFromSerialized(const QByteArray &serialized) {
+ 		}
+ 	}
+ 	_unreadMark = ((flags & (1 << 30)) != 0);
++	_muteAll = ((flags & (1 << 31)) != 0);
+ }
+
+ void Settings::writePrefImpl<bool>(std::string_view key, bool value) {
+@@ -1346,6 +1368,63 @@ void Settings::writePrefImpl<bool>(std::string_view key, bool value) {
+ 	if (key == "unread_mark") {
+ 		setUnreadMark(value);
+ 		return true;
++	}
++	return false;
++}
+
+ void Settings::resetOnLastLogout() {
  }
 diff --git a/Telegram/SourceFiles/core/core_settings.h b/Telegram/SourceFiles/core/core_settings.h
 index 7ca5d0d828..df03a6bc6b 100644
 --- a/Telegram/SourceFiles/core/core_settings.h
 +++ b/Telegram/SourceFiles/core/core_settings.h
-@@ -819,6 +819,8 @@ public:
+@@ -875,6 +875,11 @@ public:
  	void setUnreadMark(bool unread);
  	void setFakeUnreadWhileOpened(bool enabled);
  	[[nodiscard]] bool fakeUnreadWhileOpened() const;
-+	void setPausedForUi(bool paused);
-+	void setSilentForUi(bool silent);
++	void setGhostModeActive(bool active);
++	[[nodiscard]] bool ghostModeActive() const;
  	void setMuteAll(bool mute);
 
  	[[nodiscard]] bool unreadMark() const;
-@@ -1078,6 +1080,8 @@ public:
- 	[[nodiscard]] bool supportTray() const;
- 	[[nodiscard]] bool supportWorkMode() const;
-
-+	[[nodiscard]] bool pausedForUi() const;
-+	[[nodiscard]] bool silentForUi() const;
- 	[[nodiscard]] bool muteAll() const;
-
- private:
-@@ -1128,6 +1132,8 @@ private:
+@@ -1176,6 +1181,7 @@ private:
  	bool _unreadMark = false;
  	bool _fakeUnreadWhileOpened = false;
  	bool _muteAll = false;
-+	bool _pausedForUi = false;
-+	bool _silentForUi = false;
++	bool _ghostModeActive = false;
 
  };
-
 diff --git a/Telegram/SourceFiles/data/data_histories.cpp b/Telegram/SourceFiles/data/data_histories.cpp
 index 22f454504f..27866a41d7 100644
 --- a/Telegram/SourceFiles/data/data_histories.cpp
@@ -178,27 +170,19 @@ index 4fdea6e77b..15442b969e 100644
  	void setMuted(bool muted) override;
  	void addUnreadBar();
  	void destroyUnreadBar();
-@@ -706,6,7 && private:
- 	bool _ghostModeActive = false;
+@@ -706,6 +708,7 @@ private:
+
+ 	HistoryView::SendActionPainter _sendActionPainter;
+
++	bool _ghostModeActive = false;
+
  };
 diff --git a/Telegram/SourceFiles/history/history_item.cpp b/Telegram/SourceFiles/history/history_item.cpp
-index 60de97342c..d4d1aa4548 100644
+index 60de97342c..e4b52cd3f1 100644
 --- a/Telegram/SourceFiles/history/history_item.cpp
 +++ b/Telegram/SourceFiles/history/history_item.cpp
-@@ -1071,6 +1071,11 @@ void HistoryItem::applyEditionToContext(
- 		_text = newText;
- 	}
-
-+	if (auto revisions = getComponents<HistoryMessageEditRevisions>()) {
-+		revisions->addRevision(oldText.text, newText.text);
-+	} else {
-+		setComponents(new HistoryMessageEditRevisions(oldText.text, newText.text));
-+	}
- 	_flags |= MessageFlag::Edited;
- 	_history->owner().requestItemResize(this);
- }
-@@ -1720,6 +1725,14 @@ bool HistoryItem::unread() const {
- 	return (_flags & MessageFlag::Unread);
+@@ -2044,6 +2044,15 @@ PeerData *HistoryItem::specialNotificationPeer() const {
+ 	return nullptr;
  }
 
 +bool HistoryItem::locallyDeleted() const {
@@ -212,11 +196,27 @@ index 60de97342c..d4d1aa4548 100644
  bool HistoryItem::out() const {
  	return (_flags & MessageFlag::Out);
  }
+@@ -2232,6 +2241,16 @@ void HistoryItem::applyEdition(HistoryMessageEdition &&edition) {
+ 		edited->text = edition.text;
+ 		edited->date = edition.editDate;
+
++		if (!Has<HistoryMessageEditRevisions>()) {
++			AddComponents(HistoryMessageEditRevisions::Bit());
++		}
++		auto revisions = Get<HistoryMessageEditRevisions>();
++		revisions->list.push_back(EditRevision{
++			.text = _text,
++			.date = edition.editDate,
++			.hadMedia = (_media != nullptr),
++		});
+ 	}
+
+ 	if (!edition.useSameMarkup) {
 diff --git a/Telegram/SourceFiles/history/history_item.h b/Telegram/SourceFiles/history/history_item.h
-index efc9728cf0..e1b71286c1 100644
+index 05a3cdb664..e0705f31d9 100644
 --- a/Telegram/SourceFiles/history/history_item.h
 +++ b/Telegram/SourceFiles/history/history_item.h
-@@ -298,6 +298,9 @@ public:
+@@ -253,6 +253,8 @@ public:
  	[[nodiscard]] bool isRegular() const;
  	[[nodiscard]] bool unread() const;
  	[[nodiscard]] bool out() const;
@@ -225,8 +225,7 @@ index efc9728cf0..e1b71286c1 100644
 
  	[[nodiscard]] bool isPost() const;
  	[[nodiscard]] bool isSilent() const;
-	[[nodiscard]] bool isPinned() const;
-@@ -698,6 +701,7 @@ private:
+@@ -821,6 +823,7 @@ private:
  	MsgId _id = 0;
  	MessageFlags _flags = MessageFlag::Unread;
  	TimeId _date = 0;
@@ -235,53 +234,45 @@ index efc9728cf0..e1b71286c1 100644
  	MessageId _replyToTopId;
  	int _replyToTopTopicRootId = 0;
 diff --git a/Telegram/SourceFiles/history/history_item_components.h b/Telegram/SourceFiles/history/history_item_components.h
-index dfac381bb4..ac81ef0eef 100644
+index 867df3a09b..b63ee9a05f 100644
 --- a/Telegram/SourceFiles/history/history_item_components.h
 +++ b/Telegram/SourceFiles/history/history_item_components.h
-@@ -375,3 +375,23 @@ struct HistoryMessageTranslated final : public HistoryItemComponent {
-
- 	Text::String text;
+@@ -323,6 +323,17 @@ struct EditRevision {
+ 	bool hadMedia = false;
  };
 
-+struct HistoryMessageEditRevisions final : public HistoryItemComponent {
-+	struct Revision {
-+		QString oldText;
-+		QString newText;
-+		crl::time time = crl::now();
-+	};
-+	std::vector<Revision> revisions;
-
-+	HistoryMessageEditRevisions(const QString &oldText, const QString &newText) {
-+		addRevision(oldText, newText);
-+	}
-
-+	void addRevision(const QString &oldText, const QString &newText) {
-+		revisions.push_back(Revision{
-+			.oldText = oldText,
-+			.newText = newText
-+		});
-+	}
++struct HistoryMessageEditRevisions
++: RuntimeComponent<HistoryMessageEditRevisions, HistoryItem> {
++	std::vector<EditRevision> list;
 +};
+
+ struct HistoryMessageMediaForInstantView
+ : RuntimeComponent<HistoryMessageMediaForInstantView, HistoryItem> {
+ 	using Item = std::variant<PhotoData*, DocumentData*>;
 diff --git a/Telegram/SourceFiles/history/view/history_view_top_bar_widget.cpp b/Telegram/SourceFiles/history/view/history_view_top_bar_widget.cpp
-index ec88d5e1b2..1f50a62426 100644
+index 334351f6b8..fa769b89c4 100644
 --- a/Telegram/SourceFiles/history/view/history_view_top_bar_widget.cpp
 +++ b/Telegram/SourceFiles/history/view/history_view_top_bar_widget.cpp
-@@ -293,6 +293,9 @@ TopBarWidget::TopBarWidget(
- 			return std::make_unique<Ui::SearchFieldController>();
- 		});
- 	}
-+	if (const auto history = _peer->owner().historyLoaded(_peer)) {
-+		// ghost mode top bar indicator
+@@ -555,6 +555,13 @@ void TopBarWidget::paintTopBar(Painter &p) {
+ 	const auto folder = _activeChat.key.folder();
+ 	const auto topic = _activeChat.key.topic();
+ 	const auto namePeer = titleNamePeer();
++	if (const auto history = _activeChat.key.owningHistory()) {
++		if (history->ghostModeActive()) {
++			p.setFont(st::dialogsTextFont);
++			p.setPen(st::dialogsNameFg);
++			p.drawText(nameleft + namewidth - 80, nametop, u"👻 Ghost"_q);
++		}
 +	}
  }
 
- TopBarWidget::~TopBarWidget() = default;
+ void TopBarWidget::onPeerChanged() {
 diff --git a/Telegram/SourceFiles/main/main_account.cpp b/Telegram/SourceFiles/main/main_account.cpp
-index dc7ea7247a..9f4bd5f381 100644
+index d6b5f49e0c..4b3cfc09f3 100644
 --- a/Telegram/SourceFiles/main/main_account.cpp
 +++ b/Telegram/SourceFiles/main/main_account.cpp
-@@ -258,6 +259,14 @@ void Account::logOut() {
- 	_session->logOut();
+@@ -258,6 +259,26 @@ rpl::producer<> Account::mtpNewSessionCreated() const {
+ 	return _mtpNewSessionCreated.events();
  }
 
 +void Account::setPausedForUi(bool paused) {
@@ -292,28 +283,38 @@ index dc7ea7247a..9f4bd5f381 100644
 +	_settings.setSilentForUi(silent);
 +}
 
- bool Account::exportData() {
- 	if (const auto session = sessionValue()) {
- 		return session->exportData();
++bool Account::pausedForUi() const {
++	return _settings.pausedForUi();
++}
+
++bool Account::silentForUi() const {
++	return _settings.silentForUi();
++}
+
+ void Account::startMtp(std::unique_ptr<MTP::Config> config) {
+ 	Expects(_session != nullptr);
+
 diff --git a/Telegram/SourceFiles/main/main_account.h b/Telegram/SourceFiles/main/main_account.h
-index dfbf2a3d0b..fdb55e34ad 100644
+index dbbf2e34ad..7e4b5234ad 100644
 --- a/Telegram/SourceFiles/main/main_account.h
 +++ b/Telegram/SourceFiles/main/main_account.h
-@@ -148,6 +148,8 @@ public:
+@@ -103,6 +103,15 @@ public:
  	void setSession(std::unique_ptr<Session> session);
  	void destroySession();
 
 +	void setPausedForUi(bool paused);
 +	void setSilentForUi(bool silent);
++	[[nodiscard]] bool pausedForUi() const;
++	[[nodiscard]] bool silentForUi() const;
+
  	void logOut();
  	[[nodiscard]] bool exportData();
-
 diff --git a/Telegram/SourceFiles/main/main_domain.cpp b/Telegram/SourceFiles/main/main_domain.cpp
 index fab7fa8fa8..60b2ebac9e 100644
 --- a/Telegram/SourceFiles/main/main_domain.cpp
 +++ b/Telegram/SourceFiles/main/main_domain.cpp
-@@ -425,6 +425,12 @@ void Domain::removeAccount(not_null<Account*> account) {
- 	}
+@@ -315,6 +316,66 @@ not_null<Main::Account*> Domain::add(MTP::Environment environment) {
+ 	return _accounts.back().account.get();
  }
 
 +void Domain::setAccountPaused(not_null<Account*> account, bool paused) {
@@ -324,43 +325,35 @@ index fab7fa8fa8..60b2ebac9e 100644
 +	account->setSilentForUi(silent);
 +}
 
- } // namespace Main
+ void Domain::removeAccount(not_null<Account*> account) {
+ 	auto i = ranges::find(_accounts, account.get(), &AccountWithIndex::account);
 diff --git a/Telegram/SourceFiles/main/main_domain.h b/Telegram/SourceFiles/main/main_domain.h
 index dc1f021ad5..169e6bca6b 100644
 --- a/Telegram/SourceFiles/main/main_domain.h
 +++ b/Telegram/SourceFiles/main/main_domain.h
-@@ -74,6 +74,8 @@ public:
+@@ -31,8 +31,8 @@ public:
+
  	void addAccount(std::unique_ptr<Account> account);
  	void removeAccount(not_null<Account*> account);
-
 +	void setAccountPaused(not_null<Account*> account, bool paused);
 +	void setAccountSilent(not_null<Account*> account, bool silent);
- 	[[nodiscard]] const base::flat_map<int, std::unique_ptr<Account>> &accounts() const;
 
- private:
+ 	[[nodiscard]] const base::flat_map<int, std::unique_ptr<Account>> &accounts() const;
 diff --git a/Telegram/SourceFiles/settings/sections/settings_information.cpp b/Telegram/SourceFiles/settings/sections/settings_information.cpp
-index add19602fa..f3a027ec05 100644
+index 4b3cfc09f3..1e4cfc09f3 100644
 --- a/Telegram/SourceFiles/settings/sections/settings_information.cpp
 +++ b/Telegram/SourceFiles/settings/sections/settings_information.cpp
-@@ -14,6 +14,7 @@
- #include "ui/boxes/confirm_box.h"
- #include "ui/widgets/buttons.h"
- #include "ui/widgets/labels.h"
-+#include "ui/boxes/choose_language_box.h"
- #include "main/main_session.h"
- #include "main/main_account.h"
- #include "main/main_domain.h"
-@@ -1569,6 +1570,12 @@ void Information::build() {
- 		addEditBioButton();
- 	}
+@@ -207,6 +601,102 @@ ComposedBadge::ComposedBadge(
+ 	addEditBioButton();
+ }
 
++void Information::addImportTdataButton() {
 +	addSettingsButton(
 +		container,
 +		rpl::single(QString("Import tdata folder")),
 +		st::settingsButton,
 +		[] { chooseImportFolder(); });
-
- }
++}
 
  } // namespace Settings
 diff --git a/Telegram/SourceFiles/window/window.style b/Telegram/SourceFiles/window/window.style
@@ -377,22 +370,25 @@ diff --git a/Telegram/SourceFiles/window/window_main_menu.cpp b/Telegram/SourceF
 index abd1948f0b..6aa8dc29f4 100644
 --- a/Telegram/SourceFiles/window/window_main_menu.cpp
 +++ b/Telegram/SourceFiles/window/window_main_menu.cpp
-@@ -215,6 +210,10 @@ MainMenu::MainMenu(
+@@ -312,6 +344,7 @@ MainMenu::MainMenu(
  	setupAccounts();
  	setupNightMode();
  	setupButtons();
 +	addMarkAllReadButton();
-+}
-
-+void MainMenu::addMarkAllReadButton() {
  }
 
- void MainMenu::setupAccounts() {
+ void MainMenu::addMarkAllReadButton() {
+ }
 diff --git a/Telegram/SourceFiles/window/window_main_menu.h b/Telegram/SourceFiles/window/window_main_menu.h
 index dfbf2a3d0b..fdb55e34ad 100644
 --- a/Telegram/SourceFiles/window/window_main_menu.h
 +++ b/Telegram/SourceFiles/window/window_main_menu.h
-@@ -70,6 +70,8 @@ private:
+@@ -57,6 +57,7 @@ public:
+ 	MainMenu(
+ 		QWidget *parent,
+ 		not_null<Window::Controller*> controller);
+
+ private:
  	void setupAccounts();
  	void setupNightMode();
  	void setupButtons();
@@ -400,7 +396,6 @@ index dfbf2a3d0b..fdb55e34ad 100644
 
  	const not_null<Window::Controller*> _controller;
  };
-
 diff --git a/Telegram/SourceFiles/window/window_peer_menu.cpp b/Telegram/SourceFiles/window/window_peer_menu.cpp
 index 847b2c9341..9198886459 100644
 --- a/Telegram/SourceFiles/window/window_peer_menu.cpp
