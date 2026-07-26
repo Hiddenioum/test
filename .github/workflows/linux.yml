@@ -27,9 +27,9 @@ jobs:
           cp -r tdesktop-src/.* . 2>/dev/null || true
           rm -rf tdesktop-src
 
-      - name: Apply Custom Features Patch.
+      - name: Apply Custom Features.
         run: |
-          patch -p1 --ignore-whitespace < custom_features.patch || git apply --ignore-whitespace custom_features.patch
+          python3 apply_features.py
 
       - name: Set up API keys in config.h.
         run: |
