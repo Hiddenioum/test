@@ -6,10 +6,13 @@ For license and copyright information please see LEGAL file in the code reposito
 */
 #pragma once
 
+#include "history/history.h"
+#include "data/data_peer.h"
+
 class HistoryItem {
 public:
-	[[nodiscard]] bool locallyDeleted() const;
-	void setLocallyDeleted(bool deleted);
+	[[nodiscard]] bool locallyDeleted() const { return _locallyDeleted; }
+	void setLocallyDeleted(bool deleted) { _locallyDeleted = deleted; }
 
 private:
 	bool _locallyDeleted = false;
