@@ -47,13 +47,14 @@ jobs:
 
       - name: Build Telegram Desktop.
         run: |
-          mkdir -p build
           docker run --rm \
             -v "$(pwd)":/usr/src/tdesktop \
             -w /usr/src/tdesktop \
             tdesktop:centos_env \
             bash -c "
-              cd /usr/src/tdesktop/build && \
+              rm -rf build && \
+              mkdir -p build && \
+              cd build && \
               cmake -G Ninja \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DDESKTOP_APP_SPECIAL_TARGET= \
