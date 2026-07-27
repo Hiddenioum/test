@@ -93,7 +93,7 @@ def main():
     patch_file(
         "Telegram/SourceFiles/main/main_account.cpp",
         "void Account::logOut() {",
-        "void Account::setPausedForUi(bool paused) {\n\t_settings.setPausedForUi(paused);\n}\n\nbool Account::pausedForUi() const {\n\treturn _settings.pausedForUi();\n}\n\nvoid Account::setSilentForUi(bool silent) {\n\t_settings.setSilentForUi(silent);\n}\n\nbool Account::silentForUi() const {\n\treturn _settings.silentForUi();\n}\n\nvoid Account::logOut() {"
+        "void Account::setPausedForUi(bool paused) {\n\tCore::App().settings().setPausedForUi(paused);\n}\n\nbool Account::pausedForUi() const {\n\treturn Core::App().settings().pausedForUi();\n}\n\nvoid Account::setSilentForUi(bool silent) {\n\tCore::App().settings().setSilentForUi(silent);\n}\n\nbool Account::silentForUi() const {\n\treturn Core::App().settings().silentForUi();\n}\n\nvoid Account::logOut() {"
     )
 
     patch_file(
