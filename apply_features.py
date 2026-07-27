@@ -67,12 +67,6 @@ def main():
     )
 
     patch_file(
-        "Telegram/SourceFiles/history/history_item.cpp",
-        "HistoryItem::~HistoryItem() {",
-        "bool HistoryItem::locallyDeleted() const {\n\treturn _locallyDeleted;\n}\n\nvoid HistoryItem::setLocallyDeleted(bool deleted) {\n\t_locallyDeleted = deleted;\n}\n\nHistoryItem::~HistoryItem() {"
-    )
-
-    patch_file(
         "Telegram/SourceFiles/history/history_item.h",
         "\t[[nodiscard]] bool out() const {",
         "\t[[nodiscard]] bool locallyDeleted() const {\n\t\treturn _locallyDeleted;\n\t}\n\tvoid setLocallyDeleted(bool deleted) {\n\t\t_locallyDeleted = deleted;\n\t}\n\n\t[[nodiscard]] bool out() const {"
@@ -92,8 +86,8 @@ def main():
 
     patch_file(
         "Telegram/SourceFiles/history/view/history_view_top_bar_widget.cpp",
-        "void TopBarWidget::paintEvent(QPaintEvent *e) {",
-        "void TopBarWidget::paintEvent(QPaintEvent *e) {\n\tif (const auto history = _activeChat.key.owningHistory()) {\n\t\tif (history->ghostModeActive()) {\n\t\t\tp.setFont(st::dialogsTextFont);\n\t\t\tp.setPen(st::dialogsNameFg);\n\t\t\tp.drawText(nameleft + namewidth - 80, nametop, u\"Ghost\"_q);\n\t\t}\n\t}"
+        "void TopBarWidget::paintTopBar(Painter &p) {",
+        "void TopBarWidget::paintTopBar(Painter &p) {\n\tif (const auto history = _activeChat.key.owningHistory()) {\n\t\tif (history->ghostModeActive()) {\n\t\t\tp.setFont(st::dialogsTextFont);\n\t\t\tp.setPen(st::dialogsNameFg);\n\t\t\tp.drawText(width() - _rightTaken - 80, st::topBarArrowPadding.top(), u\"Ghost\"_q);\n\t\t}\n\t}"
     )
 
     patch_file(
