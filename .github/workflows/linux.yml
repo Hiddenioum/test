@@ -47,7 +47,9 @@ jobs:
 
       - name: Build Telegram Desktop.
         run: |
+          sudo rm -rf build
           mkdir -p build
+          sudo chmod 777 build
           docker run --rm \
             -v "$(pwd)":/usr/src/tdesktop \
             -w /usr/src/tdesktop \
@@ -62,6 +64,7 @@ jobs:
                 .. && \
               ninja
             "
+          sudo chmod -R 777 build
 
       - name: Upload artifact.
         uses: actions/upload-artifact@v4
