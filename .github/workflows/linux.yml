@@ -47,14 +47,13 @@ jobs:
 
       - name: Build Telegram Desktop.
         run: |
+          mkdir -p build
           docker run --rm \
             -v "$(pwd)":/usr/src/tdesktop \
             -w /usr/src/tdesktop \
             tdesktop:centos_env \
             bash -c "
-              rm -rf build && \
-              mkdir -p build && \
-              cd build && \
+              cd /usr/src/tdesktop/build && \
               cmake -G Ninja \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DDESKTOP_APP_SPECIAL_TARGET= \
@@ -64,16 +63,10 @@ jobs:
               ninja
             "
 
-      - name: Move artifact.
-        run: |
-          mkdir -p bin
-          sudo cp build/bin/Telegram bin/Telegram || sudo cp build/Telegram bin/Telegram
-          sudo chmod 777 bin/Telegram
-
       - name: Upload artifact.
         uses: actions/upload-artifact@v4
         if: env.UPLOAD_ARTIFACT == 'true'
         with:
           name: ${{ env.ARTIFACT_NAME }}
-          path: bin/Telegram
+          path: build/bin/Telegram
           if-no-files-found: error
