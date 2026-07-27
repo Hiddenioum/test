@@ -47,15 +47,12 @@ jobs:
 
       - name: Build Telegram Desktop.
         run: |
-          sudo rm -rf build bin
-          mkdir -p bin
+          mkdir -p build
           docker run --rm \
             -v "$(pwd)":/usr/src/tdesktop \
             -w /usr/src/tdesktop \
             tdesktop:centos_env \
             bash -c "
-              rm -rf /usr/src/tdesktop/build && \
-              mkdir -p /usr/src/tdesktop/build && \
               cd /usr/src/tdesktop/build && \
               cmake -G Ninja \
                 -DCMAKE_BUILD_TYPE=Release \
@@ -63,10 +60,14 @@ jobs:
                 -DTDESKTOP_API_ID=29579556 \
                 -DTDESKTOP_API_HASH=351a588e027c04b1b5a1c2b28cbd9cfd \
                 .. && \
-              ninja && \
-              (cp bin/Telegram /usr/src/tdesktop/bin/Telegram || cp Telegram /usr/src/tdesktop/bin/Telegram) && \
-              chmod 777 /usr/src/tdesktop/bin/Telegram
+              ninja
             "
+
+      - name: Move artifact.
+        run: |
+          mkdir -p bin
+          sudo cp build/bin/Telegram bin/Telegram || sudo cp build/Telegram bin/Telegram
+          sudo chmod 777 bin/Telegram
 
       - name: Upload artifact.
         uses: actions/upload-artifact@v4
