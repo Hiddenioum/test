@@ -120,12 +120,6 @@ def main():
         "\tvoid activate(not_null<Main::Account*> account);\n\tvoid setAccountPaused(not_null<Account*> account, bool paused);\n\tvoid setAccountSilent(not_null<Account*> account, bool silent);"
     )
 
-    patch_file(
-        "Telegram/SourceFiles/window/window.style",
-        "connectingProxyOff: icon {{ \"proxy_off\", menuIconFg }};",
-        "connectingProxyOff: icon {{ \"proxy_off\", menuIconFg }};\nghostIcon: icon {{ \"menu/ghost\", menuIconFg }};"
-    )
-
     print("All custom features applied successfully!")
 
 if __name__ == "__main__":
