@@ -47,6 +47,11 @@ def main():
     # 3. Read Requests (Ghost Mode)
     patch_file(
         "Telegram/SourceFiles/data/data_histories.cpp",
+        "#include \"core/application.h\"",
+        "#include \"core/application.h\"\n#include \"core/core_settings.h\""
+    )
+    patch_file(
+        "Telegram/SourceFiles/data/data_histories.cpp",
         "void Histories::sendReadRequest(not_null<History*> history, State &state) {",
         "void Histories::sendReadRequest(not_null<History*> history, State &state) {\n\tif (history->ghostModeActive() || Core::App().settings().globalGhostMode()) {\n\t\tstate.willReadTill = 0;\n\t\tstate.willReadWhen = 0;\n\t\treturn;\n\t}"
     )
@@ -59,6 +64,11 @@ def main():
     )
 
     # 5. History Ghost Mode Methods
+    patch_file(
+        "Telegram/SourceFiles/history/history.cpp",
+        "#include \"core/ui_integration.h\"",
+        "#include \"core/ui_integration.h\"\n#include \"core/core_settings.h\""
+    )
     patch_file(
         "Telegram/SourceFiles/history/history.cpp",
         "History::~History() = default;",
@@ -112,6 +122,11 @@ def main():
     # 8. Main Account methods
     patch_file(
         "Telegram/SourceFiles/main/main_account.cpp",
+        "#include \"core/application.h\"",
+        "#include \"core/application.h\"\n#include \"core/core_settings.h\""
+    )
+    patch_file(
+        "Telegram/SourceFiles/main/main_account.cpp",
         "void Account::logOut() {",
         "void Account::setPausedForUi(bool paused) {\n\tCore::App().settings().setPausedForUi(paused);\n}\n\nbool Account::pausedForUi() const {\n\treturn Core::App().settings().pausedForUi();\n}\n\nvoid Account::setSilentForUi(bool silent) {\n\tCore::App().settings().setSilentForUi(silent);\n}\n\nbool Account::silentForUi() const {\n\treturn Core::App().settings().silentForUi();\n}\n\nvoid Account::logOut() {"
     )
@@ -138,7 +153,7 @@ def main():
     patch_file(
         "Telegram/SourceFiles/window/window_main_menu.cpp",
         "#include \"boxes/about_box.h\"",
-        "#include \"boxes/about_box.h\"\n#include \"ui/toast/toast.h\"\n#include <QFileDialog>\n#include <QDir>\n#include <QFile>"
+        "#include \"boxes/about_box.h\"\n#include \"core/core_settings.h\"\n#include \"ui/toast/toast.h\"\n#include <QFileDialog>\n#include <QDir>\n#include <QFile>"
     )
 
     patch_file(
@@ -151,7 +166,7 @@ def main():
     patch_file(
         "Telegram/SourceFiles/window/window_peer_menu.cpp",
         "#include \"boxes/about_box.h\"",
-        "#include \"boxes/about_box.h\"\n#include \"ui/toast/toast.h\""
+        "#include \"boxes/about_box.h\"\n#include \"core/core_settings.h\"\n#include \"ui/toast/toast.h\""
     )
 
     patch_file(
