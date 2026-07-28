@@ -5,7 +5,7 @@ import sys
 def patch_file(filepath, target, replacement):
     if not os.path.exists(filepath):
         print(f"Skipping missing file: {filepath}")
-        return
+        return False
     with open(filepath, "r", encoding="utf-8") as f:
         content = f.read()
     if target not in content:
@@ -14,44 +14,50 @@ def patch_file(filepath, target, replacement):
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(content)
     print(f"Patched {filepath} successfully.")
+    return True
 
 def main():
     print("Applying custom features for Telegram Desktop v7.0.5...")
 
+    # 1. API Typing (Ghost Mode)
     patch_file(
         "Telegram/SourceFiles/api/api_send_progress.cpp",
         "\tconst auto requestId = _session->api().request(MTPmessages_SetTyping(",
-        "\tif (key.history && key.history->ghostModeActive()) {\n\t\treturn;\n\t}\n\tconst auto requestId = _session->api().request(MTPmessages_SetTyping("
+        "\tif ((key.history && key.history->ghostModeActive()) || Core::App().settings().globalGhostMode()) {\n\t\treturn;\n\t}\n\tconst auto requestId = _session->api().request(MTPmessages_SetTyping("
     )
 
+    # 2. Settings (Global Ghost Mode, Paused UI, Silent UI)
     patch_file(
         "Telegram/SourceFiles/core/core_settings.h",
         "\tvoid setLoopAnimatedStickers(bool value) {\n\t\t_loopAnimatedStickers = value;\n\t}",
-        "\tvoid setLoopAnimatedStickers(bool value) {\n\t\t_loopAnimatedStickers = value;\n\t}\n\tvoid setPausedForUi(bool paused) { _pausedForUi = paused; }\n\t[[nodiscard]] bool pausedForUi() const { return _pausedForUi; }\n\tvoid setSilentForUi(bool silent) { _silentForUi = silent; }\n\t[[nodiscard]] bool silentForUi() const { return _silentForUi; }"
+        "\tvoid setLoopAnimatedStickers(bool value) {\n\t\t_loopAnimatedStickers = value;\n\t}\n\tvoid setPausedForUi(bool paused) { _pausedForUi = paused; }\n\t[[nodiscard]] bool pausedForUi() const { return _pausedForUi; }\n\tvoid setSilentForUi(bool silent) { _silentForUi = silent; }\n\t[[nodiscard]] bool silentForUi() const { return _silentForUi; }\n\tvoid setGlobalGhostMode(bool ghost) { _globalGhostMode = ghost; }\n\t[[nodiscard]] bool globalGhostMode() const { return _globalGhostMode; }"
     )
 
     patch_file(
         "Telegram/SourceFiles/core/core_settings.h",
         "\tbool _loopAnimatedStickers = true;",
-        "\tbool _loopAnimatedStickers = true;\n\tbool _pausedForUi = false;\n\tbool _silentForUi = false;"
+        "\tbool _loopAnimatedStickers = true;\n\tbool _pausedForUi = false;\n\tbool _silentForUi = false;\n\tbool _globalGhostMode = false;"
     )
 
+    # 3. Read Requests (Ghost Mode)
     patch_file(
         "Telegram/SourceFiles/data/data_histories.cpp",
         "void Histories::sendReadRequest(not_null<History*> history, State &state) {",
-        "void Histories::sendReadRequest(not_null<History*> history, State &state) {\n\tif (history->ghostModeActive()) {\n\t\tstate.willReadTill = 0;\n\t\tstate.willReadWhen = 0;\n\t\treturn;\n\t}"
+        "void Histories::sendReadRequest(not_null<History*> history, State &state) {\n\tif (history->ghostModeActive() || Core::App().settings().globalGhostMode()) {\n\t\tstate.willReadTill = 0;\n\t\tstate.willReadWhen = 0;\n\t\treturn;\n\t}"
     )
 
+    # 4. Deleted Messages (Keep & Tag [Deleted])
     patch_file(
         "Telegram/SourceFiles/data/data_session.cpp",
         "\tauto toDestroy = std::vector<not_null<HistoryItem*>>();\n\tauto historiesToCheck = base::flat_set<not_null<History*>>();",
         "\tfor (const auto &messageId : data) {\n\t\tif (const auto item = message(peerId, messageId.v)) {\n\t\t\titem->setLocallyDeleted(true);\n\t\t}\n\t}\n\tauto toDestroy = std::vector<not_null<HistoryItem*>>();\n\tauto historiesToCheck = base::flat_set<not_null<History*>>();"
     )
 
+    # 5. History Ghost Mode Methods
     patch_file(
         "Telegram/SourceFiles/history/history.cpp",
         "History::~History() = default;",
-        "History::~History() = default;\n\nvoid History::setGhostModeActive(bool active) {\n\t_ghostModeActive = active;\n}\n\nbool History::ghostModeActive() const {\n\treturn _ghostModeActive;\n}"
+        "History::~History() = default;\n\nvoid History::setGhostModeActive(bool active) {\n\t_ghostModeActive = active;\n}\n\nbool History::ghostModeActive() const {\n\treturn _ghostModeActive || Core::App().settings().globalGhostMode();\n}"
     )
 
     patch_file(
@@ -66,10 +72,11 @@ def main():
         "\tstd::optional<Data::Folder*> _folder;\n\tbool _ghostModeActive = false;"
     )
 
+    # 6. HistoryItem setLocallyDeleted with [Deleted] Tag
     patch_file(
         "Telegram/SourceFiles/history/history_item.h",
         "\t[[nodiscard]] bool out() const {",
-        "\t[[nodiscard]] bool locallyDeleted() const {\n\t\treturn _locallyDeleted;\n\t}\n\tvoid setLocallyDeleted(bool deleted) {\n\t\t_locallyDeleted = deleted;\n\t}\n\n\t[[nodiscard]] bool out() const {"
+        "\t[[nodiscard]] bool locallyDeleted() const {\n\t\treturn _locallyDeleted;\n\t}\n\tvoid setLocallyDeleted(bool deleted);\n\n\t[[nodiscard]] bool out() const {"
     )
 
     patch_file(
@@ -79,17 +86,25 @@ def main():
     )
 
     patch_file(
+        "Telegram/SourceFiles/history/history_item.cpp",
+        "HistoryItem::~HistoryItem() {",
+        "void HistoryItem::setLocallyDeleted(bool deleted) {\n\tif (_locallyDeleted != deleted) {\n\t\t_locallyDeleted = deleted;\n\t\tif (deleted) {\n\t\t\tauto current = originalText();\n\t\t\tcurrent.text = u\"\\U0001F5D1\\U0000FE0F [Deleted] \"_q + current.text;\n\t\t\tsetText(current);\n\t\t}\n\t}\n}\n\nHistoryItem::~HistoryItem() {"
+    )
+
+    patch_file(
         "Telegram/SourceFiles/history/history_item_components.h",
         "struct HistoryMessageEdited",
         "struct HistoryMessageEditRevisions {\n\tstd::vector<int> list;\n};\n\nstruct HistoryMessageEdited"
     )
 
+    # 7. Top Bar Ghost Mode Badge
     patch_file(
         "Telegram/SourceFiles/history/view/history_view_top_bar_widget.cpp",
         "void TopBarWidget::paintTopBar(Painter &p) {",
-        "void TopBarWidget::paintTopBar(Painter &p) {\n\tif (const auto history = _activeChat.key.owningHistory()) {\n\t\tif (history->ghostModeActive()) {\n\t\t\tp.setFont(st::dialogsTextFont);\n\t\t\tp.setPen(st::dialogsNameFg);\n\t\t\tp.drawText(width() - _rightTaken - 80, st::topBarArrowPadding.top(), u\"Ghost\"_q);\n\t\t}\n\t}"
+        "void TopBarWidget::paintTopBar(Painter &p) {\n\tif (const auto history = _activeChat.key.owningHistory()) {\n\t\tif (history->ghostModeActive()) {\n\t\t\tp.setFont(st::dialogsTextFont);\n\t\t\tp.setPen(st::dialogsNameFg);\n\t\t\tp.drawText(width() - _rightTaken - 100, st::topBarArrowPadding.top(), u\"\\U0001F47B Ghost\"_q);\n\t\t}\n\t}"
     )
 
+    # 8. Main Account methods
     patch_file(
         "Telegram/SourceFiles/main/main_account.cpp",
         "void Account::logOut() {",
@@ -114,7 +129,33 @@ def main():
         "\tvoid activate(not_null<Main::Account*> account);\n\tvoid setAccountPaused(not_null<Account*> account, bool paused);\n\tvoid setAccountSilent(not_null<Account*> account, bool silent);"
     )
 
-    print("All custom features applied successfully!")
+    # 9. Main Menu: Add Ghost Mode Toggle & Import tdata Button!
+    patch_file(
+        "Telegram/SourceFiles/window/window_main_menu.cpp",
+        "#include \"boxes/about_box.h\"",
+        "#include \"boxes/about_box.h\"\n#include \"ui/toast/toast.h\"\n#include <QFileDialog>\n#include <QDir>\n#include <QFile>"
+    )
+
+    patch_file(
+        "Telegram/SourceFiles/window/window_main_menu.cpp",
+        "\taddAction(\n\t\ttr::lng_menu_settings(),\n\t\t{ &st::menuIconSettings }\n\t)->setClickedCallback([=] {\n\t\tcontroller->showSettings();\n\t});",
+        "\taddAction(\n\t\ttr::lng_menu_settings(),\n\t\t{ &st::menuIconSettings }\n\t)->setClickedCallback([=] {\n\t\tcontroller->showSettings();\n\t});\n\n\t_menu->add(\n\t\tCreateButtonWithIcon(\n\t\t\t_menu,\n\t\t\trpl::single(u\"\\U0001F47B Ghost Mode\"_q),\n\t\t\tst::mainMenuButton,\n\t\t\t{ &st::menuIconNightMode })\n\t)->setClickedCallback([=] {\n\t\tauto &s = Core::App().settings();\n\t\ts.setGlobalGhostMode(!s.globalGhostMode());\n\t\tCore::App().saveSettingsDelayed();\n\t\tUi::Toast::Show(s.globalGhostMode() ? u\"\\U0001F47B Ghost Mode ON\"_q : u\"\\U0001F47B Ghost Mode OFF\"_q);\n\t});\n\n\t_menu->add(\n\t\tCreateButtonWithIcon(\n\t\t\t_menu,\n\t\t\trpl::single(u\"\\U0001F4C2 Import tdata\"_q),\n\t\t\tst::mainMenuButton,\n\t\t\t{ &st::menuIconRestore })\n\t)->setClickedCallback([=] {\n\t\tconst auto path = QFileDialog::getExistingDirectory(\n\t\t\tnullptr,\n\t\t\tu\"Select tdata Directory\"_q,\n\t\t\tQString());\n\t\tif (!path.isEmpty()) {\n\t\t\tconst auto target = cWorkingDir() + u\"tdata\"_q;\n\t\t\tQDir().mkdir(target);\n\t\t\tfor (const auto &file : QDir(path).entryList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot)) {\n\t\t\t\tconst auto src = path + '/' + file;\n\t\t\t\tconst auto dst = target + '/' + file;\n\t\t\t\tif (QFileInfo(src).isDir()) {\n\t\t\t\t\tQDir().mkdir(dst);\n\t\t\t\t} else {\n\t\t\t\t\tQFile::copy(src, dst);\n\t\t\t\t}\n\t\t\t}\n\t\t\tUi::Toast::Show(u\"tdata Imported! Restarting...\"_q);\n\t\t\tCore::App().restart();\n\t\t}\n\t});"
+    )
+
+    # 10. Per-Chat Context Menu: Right-Click -> Toggle Ghost Mode
+    patch_file(
+        "Telegram/SourceFiles/window/window_peer_menu.cpp",
+        "#include \"boxes/about_box.h\"",
+        "#include \"boxes/about_box.h\"\n#include \"ui/toast/toast.h\""
+    )
+
+    patch_file(
+        "Telegram/SourceFiles/window/window_peer_menu.cpp",
+        "void Filler::fillContextMenuActions() {",
+        "void Filler::fillContextMenuActions() {\n\tif (const auto history = _request.key.history()) {\n\t\tconst auto active = history->ghostModeActive();\n\t\t_addAction(active ? u\"\\U0001F47B Disable Ghost Mode\"_q : u\"\\U0001F47B Enable Ghost Mode\"_q, [=] {\n\t\t\thistory->setGhostModeActive(!active);\n\t\t\tUi::Toast::Show(!active ? u\"\\U0001F47B Ghost Mode ON for this chat\"_q : u\"\\U0001F47B Ghost Mode OFF for this chat\"_q);\n\t\t}, &st::menuIconNightMode);\n\t}"
+    )
+
+    print("All custom UI & core features applied successfully!")
 
 if __name__ == "__main__":
     main()
