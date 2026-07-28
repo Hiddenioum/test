@@ -19,7 +19,12 @@ def patch_file(filepath, target, replacement):
 def main():
     print("Applying custom features for Telegram Desktop v7.0.5...")
 
-    # 1. API Typing (Ghost Mode)
+    # 1. API Typing (Ghost Mode) - add missing include first
+    patch_file(
+        "Telegram/SourceFiles/api/api_send_progress.cpp",
+        "#include \"api/api_send_progress.h\"",
+        "#include \"api/api_send_progress.h\"\n#include \"core/application.h\"\n#include \"core/core_settings.h\""
+    )
     patch_file(
         "Telegram/SourceFiles/api/api_send_progress.cpp",
         "\tconst auto requestId = _session->api().request(MTPmessages_SetTyping(",
