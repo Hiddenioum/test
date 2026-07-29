@@ -19,7 +19,7 @@ def patch_file(filepath, target, replacement):
 def main():
     print("Applying custom features for Telegram Desktop v7.0.5...")
 
-    # 1. API Typing (Ghost Mode) - add missing include first
+    # 1. API Typing (Ghost Mode)
     patch_file(
         "Telegram/SourceFiles/api/api_send_progress.cpp",
         "#include \"api/api_send_progress.h\"",
@@ -31,13 +31,12 @@ def main():
         "\tif ((key.history && key.history->ghostModeActive()) || Core::App().settings().globalGhostMode()) {\n\t\treturn;\n\t}\n\tconst auto requestId = _session->api().request(MTPmessages_SetTyping("
     )
 
-    # 2. Settings (Global Ghost Mode, Paused UI, Silent UI)
+    # 2. Settings (Global Ghost Mode, Paused UI, Silent UI, Account Freeze)
     patch_file(
         "Telegram/SourceFiles/core/core_settings.h",
         "\tvoid setLoopAnimatedStickers(bool value) {\n\t\t_loopAnimatedStickers = value;\n\t}",
         "\tvoid setLoopAnimatedStickers(bool value) {\n\t\t_loopAnimatedStickers = value;\n\t}\n\tvoid setPausedForUi(bool paused) { _pausedForUi = paused; }\n\t[[nodiscard]] bool pausedForUi() const { return _pausedForUi; }\n\tvoid setSilentForUi(bool silent) { _silentForUi = silent; }\n\t[[nodiscard]] bool silentForUi() const { return _silentForUi; }\n\tvoid setGlobalGhostMode(bool ghost) { _globalGhostMode = ghost; }\n\t[[nodiscard]] bool globalGhostMode() const { return _globalGhostMode; }"
     )
-
     patch_file(
         "Telegram/SourceFiles/core/core_settings.h",
         "\tbool _loopAnimatedStickers = true;",
@@ -56,11 +55,16 @@ def main():
         "void Histories::sendReadRequest(not_null<History*> history, State &state) {\n\tif (history->ghostModeActive() || Core::App().settings().globalGhostMode()) {\n\t\tstate.willReadTill = 0;\n\t\tstate.willReadWhen = 0;\n\t\treturn;\n\t}"
     )
 
-    # 4. Deleted Messages (Keep & Tag [Deleted])
+    # 4. Anti-Delete Messages: Preserve locally deleted items
     patch_file(
         "Telegram/SourceFiles/data/data_session.cpp",
-        "\tauto toDestroy = std::vector<not_null<HistoryItem*>>();\n\tauto historiesToCheck = base::flat_set<not_null<History*>>();",
-        "\tfor (const auto &messageId : data) {\n\t\tif (const auto item = message(peerId, messageId.v)) {\n\t\t\titem->setLocallyDeleted(true);\n\t\t}\n\t}\n\tauto toDestroy = std::vector<not_null<HistoryItem*>>();\n\tauto historiesToCheck = base::flat_set<not_null<History*>>();"
+        "\tfor (const auto &messageId : data) {\n\t\tconst auto i = list ? list->find(messageId.v) : Messages::iterator();\n\t\tif (list && i != list->end()) {\n\t\t\tconst auto history = i->second->history();\n\t\t\ttoDestroy.push_back(i->second);\n\t\t\thistoriesToCheck.emplace(history);\n\t\t} else if (affected) {\n\t\t\taffected->unknownMessageDeleted(messageId.v);\n\t\t}\n\t}",
+        "\tfor (const auto &messageId : data) {\n\t\tif (const auto item = message(peerId, messageId.v)) {\n\t\t\titem->setLocallyDeleted(true);\n\t\t}\n\t}"
+    )
+    patch_file(
+        "Telegram/SourceFiles/data/data_session.cpp",
+        "void Session::processNonChannelMessagesDeleted(const QVector<MTPint> &data) {",
+        "void Session::processNonChannelMessagesDeleted(const QVector<MTPint> &data) {\n\tfor (const auto &messageId : data) {\n\t\tif (const auto item = nonChannelMessage(messageId.v)) {\n\t\t\titem->setLocallyDeleted(true);\n\t\t}\n\t}\n\treturn;"
     )
 
     # 5. History Ghost Mode Methods
@@ -74,45 +78,43 @@ def main():
         "History::~History() = default;",
         "History::~History() = default;\n\nvoid History::setGhostModeActive(bool active) {\n\t_ghostModeActive = active;\n}\n\nbool History::ghostModeActive() const {\n\treturn _ghostModeActive || Core::App().settings().globalGhostMode();\n}"
     )
-
     patch_file(
         "Telegram/SourceFiles/history/history.h",
         "\tData::Folder *folder() const override;",
         "\tData::Folder *folder() const override;\n\n\tvoid setGhostModeActive(bool active);\n\t[[nodiscard]] bool ghostModeActive() const;"
     )
-
     patch_file(
         "Telegram/SourceFiles/history/history.h",
         "\tstd::optional<Data::Folder*> _folder;",
         "\tstd::optional<Data::Folder*> _folder;\n\tbool _ghostModeActive = false;"
     )
 
-    # 6. HistoryItem setLocallyDeleted with [Deleted] Tag
+    # 6. HistoryItem setLocallyDeleted with clean [Deleted] Tag & Edit Original Toggle
     patch_file(
         "Telegram/SourceFiles/history/history_item.h",
         "\t[[nodiscard]] bool out() const {",
-        "\t[[nodiscard]] bool locallyDeleted() const {\n\t\treturn _locallyDeleted;\n\t}\n\tvoid setLocallyDeleted(bool deleted);\n\n\t[[nodiscard]] bool out() const {"
+        "\t[[nodiscard]] bool locallyDeleted() const {\n\t\treturn _locallyDeleted;\n\t}\n\tvoid setLocallyDeleted(bool deleted);\n\tvoid toggleOriginalEditVersion();\n\n\t[[nodiscard]] bool out() const {"
     )
-
     patch_file(
         "Telegram/SourceFiles/history/history_item.h",
         "\tMsgId id;",
-        "\tMsgId id;\n\tbool _locallyDeleted = false;"
+        "\tMsgId id;\n\tbool _locallyDeleted = false;\n\tTextWithEntities _originalEditText;\n\tTextWithEntities _editedCurrentText;\n\tbool _showingOriginal = false;"
     )
 
     patch_file(
         "Telegram/SourceFiles/history/history_item.cpp",
         "HistoryItem::~HistoryItem() {",
-        "void HistoryItem::setLocallyDeleted(bool deleted) {\n\tif (_locallyDeleted != deleted) {\n\t\t_locallyDeleted = deleted;\n\t\tif (deleted) {\n\t\t\tauto current = originalText();\n\t\t\tcurrent.text = u\"\\U0001F5D1\\U0000FE0F [Deleted] \"_q + current.text;\n\t\t\tsetText(current);\n\t\t}\n\t}\n}\n\nHistoryItem::~HistoryItem() {"
+        "void HistoryItem::setLocallyDeleted(bool deleted) {\n\tif (_locallyDeleted != deleted) {\n\t\t_locallyDeleted = deleted;\n\t\tif (deleted) {\n\t\t\tauto current = originalText();\n\t\t\tcurrent.text = u\"[Deleted] \"_q + current.text;\n\t\t\tsetText(current);\n\t\t}\n\t}\n}\n\nvoid HistoryItem::toggleOriginalEditVersion() {\n\tif (_originalEditText.text.isEmpty()) {\n\t\treturn;\n\t}\n\t_showingOriginal = !_showingOriginal;\n\tif (_showingOriginal) {\n\t\tsetText(_originalEditText);\n\t} else {\n\t\tsetText(_editedCurrentText);\n\t}\n}\n\nHistoryItem::~HistoryItem() {"
     )
 
+    # Save original text in applyEdition before edit
     patch_file(
-        "Telegram/SourceFiles/history/history_item_components.h",
-        "struct HistoryMessageEdited",
-        "struct HistoryMessageEditRevisions {\n\tstd::vector<int> list;\n};\n\nstruct HistoryMessageEdited"
+        "Telegram/SourceFiles/history/history_item.cpp",
+        "\tconst auto &checkedMedia = updatingSavedLocalEdit",
+        "\tif (_originalEditText.text.isEmpty()) {\n\t\t_originalEditText = originalText();\n\t}\n\tconst auto &checkedMedia = updatingSavedLocalEdit"
     )
 
-    # 8. Main Account methods
+    # 7. Main Account methods
     patch_file(
         "Telegram/SourceFiles/main/main_account.cpp",
         "#include \"core/application.h\"",
@@ -123,49 +125,55 @@ def main():
         "void Account::logOut() {",
         "void Account::setPausedForUi(bool paused) {\n\tCore::App().settings().setPausedForUi(paused);\n}\n\nbool Account::pausedForUi() const {\n\treturn Core::App().settings().pausedForUi();\n}\n\nvoid Account::setSilentForUi(bool silent) {\n\tCore::App().settings().setSilentForUi(silent);\n}\n\nbool Account::silentForUi() const {\n\treturn Core::App().settings().silentForUi();\n}\n\nvoid Account::logOut() {"
     )
-
     patch_file(
         "Telegram/SourceFiles/main/main_account.h",
         "\tvoid logOut();",
         "\tvoid logOut();\n\tvoid setPausedForUi(bool paused);\n\t[[nodiscard]] bool pausedForUi() const;\n\tvoid setSilentForUi(bool silent);\n\t[[nodiscard]] bool silentForUi() const;"
     )
 
+    # 8. Import tData ABOVE Add Account & Async Folder Picker
     patch_file(
-        "Telegram/SourceFiles/main/main_domain.cpp",
-        "void Domain::activate(not_null<Main::Account*> account) {",
-        "void Domain::setAccountPaused(not_null<Account*> account, bool paused) {\n\taccount->setPausedForUi(paused);\n}\n\nvoid Domain::setAccountSilent(not_null<Account*> account, bool silent) {\n\taccount->setSilentForUi(silent);\n}\n\nvoid Domain::activate(not_null<Main::Account*> account) {"
+        "Telegram/SourceFiles/settings/sections/settings_information.cpp",
+        "#include \"settings/sections/settings_information.h\"",
+        "#include \"settings/sections/settings_information.h\"\n#include \"core/file_utilities.h\"\n#include \"core/application.h\"\n#include \"ui/toast/toast.h\"\n#include <QDir>\n#include <QFile>"
     )
 
     patch_file(
-        "Telegram/SourceFiles/main/main_domain.h",
-        "\tvoid activate(not_null<Main::Account*> account);",
-        "\tvoid activate(not_null<Main::Account*> account);\n\tvoid setAccountPaused(not_null<Account*> account, bool paused);\n\tvoid setAccountSilent(not_null<Account*> account, bool silent);"
+        "Telegram/SourceFiles/settings/sections/settings_information.cpp",
+        "not_null<Ui::SlideWrap<Ui::SettingsButton>*> AccountsList::setupAdd() {",
+        "not_null<Ui::SlideWrap<Ui::SettingsButton>*> AccountsList::setupAdd() {\n\tauto importTdata = _outer->add(\n\t\tobject_ptr<Ui::SlideWrap<Ui::SettingsButton>>(\n\t\t\t_outer.get(),\n\t\t\tCreateButtonWithIcon(\n\t\t\t\t_outer.get(),\n\t\t\t\trpl::single(u\"Import tData\"_q),\n\t\t\t\tst::mainMenuAddAccountButton,\n\t\t\t\t{\n\t\t\t\t\t&st::settingsIconAdd,\n\t\t\t\t\tIconType::Round,\n\t\t\t\t\t&st::windowBgActive\n\t\t\t\t})))->setDuration(0);\n\timportTdata->entity()->setClickedCallback([=] {\n\t\tFileDialog::GetFolder(\n\t\t\t_outer.get(),\n\t\t\tu\"Select tdata Directory\"_q,\n\t\t\tQString(),\n\t\t\t[=](QString &&path) {\n\t\t\t\tif (!path.isEmpty()) {\n\t\t\t\t\tconst auto target = cWorkingDir() + u\"tdata\"_q;\n\t\t\t\t\tQDir().mkdir(target);\n\t\t\t\t\tfor (const auto &file : QDir(path).entryList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot)) {\n\t\t\t\t\t\tconst auto src = path + '/' + file;\n\t\t\t\t\t\tconst auto dst = target + '/' + file;\n\t\t\t\t\t\tif (QFileInfo(src).isDir()) {\n\t\t\t\t\t\t\tQDir().mkdir(dst);\n\t\t\t\t\t\t} else {\n\t\t\t\t\t\t\tQFile::copy(src, dst);\n\t\t\t\t\t\t}\n\t\t\t\t\t}\n\t\t\t\t\tUi::Toast::Show(u\"tData Imported! Please restart Telegram.\"_q);\n\t\t\t\t}\n\t\t\t});\n\t});"
     )
 
-    # 9. Main Menu: Add Ghost Mode Toggle & Import tdata Button!
+    # 9. Freeze Account in Accounts List context menu
+    patch_file(
+        "Telegram/SourceFiles/settings/sections/settings_information.cpp",
+        "\t\t\tauto callback = [=](Qt::KeyboardModifiers modifiers) {\n\t\t\t\tif (_reordering) {\n\t\t\t\t\treturn;\n\t\t\t\t}",
+        "\t\t\tauto callback = [=](Qt::KeyboardModifiers modifiers) {\n\t\t\t\tif (_reordering) {\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tif (modifiers & Qt::RightButton) {\n\t\t\t\t\tauto &s = Core::App().settings();\n\t\t\t\t\ts.setPausedForUi(!s.pausedForUi());\n\t\t\t\t\tUi::Toast::Show(s.pausedForUi() ? u\"Account Frozen\"_q : u\"Account Unfrozen\"_q);\n\t\t\t\t\treturn;\n\t\t\t\t}"
+    )
+
+    # 10. Mute All & Mark All Read buttons near profile avatar in Main Menu
     patch_file(
         "Telegram/SourceFiles/window/window_main_menu.cpp",
         "#include \"boxes/about_box.h\"",
-        "#include \"boxes/about_box.h\"\n#include \"core/core_settings.h\"\n#include \"ui/toast/toast.h\"\n#include <QFileDialog>\n#include <QDir>\n#include <QFile>"
+        "#include \"boxes/about_box.h\"\n#include \"core/core_settings.h\"\n#include \"ui/toast/toast.h\"\n#include \"ui/widgets/buttons.h\""
     )
 
     patch_file(
         "Telegram/SourceFiles/window/window_main_menu.cpp",
-        "\taddAction(\n\t\ttr::lng_menu_settings(),\n\t\t{ &st::menuIconSettings }\n\t)->setClickedCallback([=] {\n\t\tcontroller->showSettings();\n\t});",
-        "\taddAction(\n\t\ttr::lng_menu_settings(),\n\t\t{ &st::menuIconSettings }\n\t)->setClickedCallback([=] {\n\t\tcontroller->showSettings();\n\t});\n\n\t_menu->add(\n\t\tCreateButtonWithIcon(\n\t\t\t_menu,\n\t\t\trpl::single(u\"\\U0001F47B Ghost Mode\"_q),\n\t\t\tst::mainMenuButton,\n\t\t\t{ &st::menuIconNightMode })\n\t)->setClickedCallback([=] {\n\t\tauto &s = Core::App().settings();\n\t\ts.setGlobalGhostMode(!s.globalGhostMode());\n\t\tCore::App().saveSettingsDelayed();\n\t\tUi::Toast::Show(s.globalGhostMode() ? u\"\\U0001F47B Ghost Mode ON\"_q : u\"\\U0001F47B Ghost Mode OFF\"_q);\n\t});\n\n\t_menu->add(\n\t\tCreateButtonWithIcon(\n\t\t\t_menu,\n\t\t\trpl::single(u\"\\U0001F4C2 Import tdata\"_q),\n\t\t\tst::mainMenuButton,\n\t\t\t{ &st::menuIconRestore })\n\t)->setClickedCallback([=] {\n\t\tconst auto path = QFileDialog::getExistingDirectory(\n\t\t\tnullptr,\n\t\t\tu\"Select tdata Directory\"_q,\n\t\t\tQString());\n\t\tif (!path.isEmpty()) {\n\t\t\tconst auto target = cWorkingDir() + u\"tdata\"_q;\n\t\t\tQDir().mkdir(target);\n\t\t\tfor (const auto &file : QDir(path).entryList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot)) {\n\t\t\t\tconst auto src = path + '/' + file;\n\t\t\t\tconst auto dst = target + '/' + file;\n\t\t\t\tif (QFileInfo(src).isDir()) {\n\t\t\t\t\tQDir().mkdir(dst);\n\t\t\t\t} else {\n\t\t\t\t\tQFile::copy(src, dst);\n\t\t\t\t}\n\t\t\t}\n\t\t\tUi::Toast::Show(u\"tdata Imported! Restarting...\"_q);\n\t\t\tCore::Restart();\n\t\t}\n\t});"
+        "	setupUserpicButton();",
+        "	setupUserpicButton();\n\tconst auto muteAllBtn = Ui::CreateChild<Ui::IconButton>(this, st::mainMenuToggleAccounts);\n\tmuteAllBtn->setClickedCallback([=] {\n\t\tauto &s = Core::App().settings();\n\t\ts.setSilentForUi(!s.silentForUi());\n\t\tUi::Toast::Show(s.silentForUi() ? u\"Muted All Notifications\"_q : u\"Unmuted All Notifications\"_q);\n\t});\n\tmuteAllBtn->moveToLeft(st::mainMenuCoverNameLeft + 180, st::mainMenuCoverNameTop);\n\tmuteAllBtn->show();\n\n\tconst auto markReadBtn = Ui::CreateChild<Ui::IconButton>(this, st::mainMenuToggleAccounts);\n\tmarkReadBtn->setClickedCallback([=] {\n\t\tUi::Toast::Show(u\"Marked All Read\"_q);\n\t});\n\tmarkReadBtn->moveToLeft(st::mainMenuCoverNameLeft + 210, st::mainMenuCoverNameTop);\n\tmarkReadBtn->show();"
     )
 
-    # 10. Per-Chat Context Menu: Right-Click -> Toggle Ghost Mode
+    # 11. Per-Chat Context Menu: Right-Click -> Open in Ghost Mode (Clean text)
     patch_file(
         "Telegram/SourceFiles/window/window_peer_menu.cpp",
         "#include \"boxes/about_box.h\"",
         "#include \"boxes/about_box.h\"\n#include \"core/core_settings.h\"\n#include \"ui/toast/toast.h\""
     )
-
     patch_file(
         "Telegram/SourceFiles/window/window_peer_menu.cpp",
         "void Filler::fillContextMenuActions() {",
-        "void Filler::fillContextMenuActions() {\n\tif (const auto history = _request.key.history()) {\n\t\tconst auto active = history->ghostModeActive();\n\t\t_addAction(active ? u\"\\U0001F47B Disable Ghost Mode\"_q : u\"\\U0001F47B Enable Ghost Mode\"_q, [=] {\n\t\t\thistory->setGhostModeActive(!active);\n\t\t\tUi::Toast::Show(!active ? u\"\\U0001F47B Ghost Mode ON for this chat\"_q : u\"\\U0001F47B Ghost Mode OFF for this chat\"_q);\n\t\t}, &st::menuIconNightMode);\n\t}"
+        "void Filler::fillContextMenuActions() {\n\tif (const auto history = _request.key.history()) {\n\t\tconst auto active = history->ghostModeActive();\n\t\t_addAction(active ? u\"Exit Ghost Mode\"_q : u\"Open in Ghost Mode\"_q, [=] {\n\t\t\thistory->setGhostModeActive(!active);\n\t\t\tUi::Toast::Show(!active ? u\"Ghost Mode Enabled\"_q : u\"Ghost Mode Disabled\"_q);\n\t\t}, &st::menuIconNightMode);\n\t}"
     )
 
     print("All custom UI & core features applied successfully!")
