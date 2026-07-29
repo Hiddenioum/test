@@ -161,7 +161,7 @@ def main():
     patch_file(
         "Telegram/SourceFiles/window/window_main_menu.cpp",
         "	setupUserpicButton();",
-        "	setupUserpicButton();\n\tconst auto muteAllBtn = Ui::CreateChild<Ui::IconButton>(this, st::mainMenuToggleAccounts);\n\tmuteAllBtn->setClickedCallback([=] {\n\t\tauto &s = Core::App().settings();\n\t\ts.setSilentForUi(!s.silentForUi());\n\t\tUi::Toast::Show(s.silentForUi() ? u\"Muted All Notifications\"_q : u\"Unmuted All Notifications\"_q);\n\t});\n\tmuteAllBtn->moveToLeft(st::mainMenuCoverNameLeft + 180, st::mainMenuCoverNameTop);\n\tmuteAllBtn->show();\n\n\tconst auto markReadBtn = Ui::CreateChild<Ui::IconButton>(this, st::mainMenuToggleAccounts);\n\tmarkReadBtn->setClickedCallback([=] {\n\t\tUi::Toast::Show(u\"Marked All Read\"_q);\n\t});\n\tmarkReadBtn->moveToLeft(st::mainMenuCoverNameLeft + 210, st::mainMenuCoverNameTop);\n\tmarkReadBtn->show();"
+        "	setupUserpicButton();\n\tconst auto muteAllBtn = Ui::CreateChild<Ui::IconButton>(this, st::mainMenuCloudButton);\n\tmuteAllBtn->setClickedCallback([=] {\n\t\tauto &s = Core::App().settings();\n\t\ts.setSilentForUi(!s.silentForUi());\n\t\tUi::Toast::Show(s.silentForUi() ? u\"Muted All Notifications\"_q : u\"Unmuted All Notifications\"_q);\n\t});\n\tmuteAllBtn->moveToLeft(st::mainMenuCoverNameLeft + 180, st::mainMenuCoverNameTop);\n\tmuteAllBtn->show();\n\n\tconst auto markReadBtn = Ui::CreateChild<Ui::IconButton>(this, st::mainMenuCloudButton);\n\tmarkReadBtn->setClickedCallback([=] {\n\t\tUi::Toast::Show(u\"Marked All Read\"_q);\n\t});\n\tmarkReadBtn->moveToLeft(st::mainMenuCoverNameLeft + 210, st::mainMenuCoverNameTop);\n\tmarkReadBtn->show();"
     )
 
     # 11. Per-Chat Context Menu: Right-Click -> Open in Ghost Mode (Clean text)
