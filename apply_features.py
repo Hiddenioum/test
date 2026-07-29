@@ -112,13 +112,6 @@ def main():
         "struct HistoryMessageEditRevisions {\n\tstd::vector<int> list;\n};\n\nstruct HistoryMessageEdited"
     )
 
-    # 7. Top Bar Ghost Mode Badge
-    patch_file(
-        "Telegram/SourceFiles/history/view/history_view_top_bar_widget.cpp",
-        "void TopBarWidget::paintTopBar(Painter &p) {",
-        "void TopBarWidget::paintTopBar(Painter &p) {\n\tif (const auto history = _activeChat.key.owningHistory()) {\n\t\tif (history->ghostModeActive()) {\n\t\t\tp.setFont(st::dialogsTextFont);\n\t\t\tp.setPen(st::dialogsNameFg);\n\t\t\tp.drawText(width() - _rightTaken - 100, st::topBarArrowPadding.top(), u\"\\U0001F47B Ghost\"_q);\n\t\t}\n\t}"
-    )
-
     # 8. Main Account methods
     patch_file(
         "Telegram/SourceFiles/main/main_account.cpp",
