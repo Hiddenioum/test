@@ -48,7 +48,9 @@ jobs:
       - name: Build Telegram Desktop.
         run: |
           mkdir -p build
+          chmod -R 777 .
           docker run --rm \
+            --user root \
             -v "$(pwd)":/usr/src/tdesktop \
             -w /usr/src/tdesktop \
             tdesktop:centos_env \
@@ -65,6 +67,7 @@ jobs:
 
       - name: Move artifact.
         run: |
+          sudo chmod -R 777 .
           mkdir -p bin
           mv build/bin/Telegram bin/Telegram || mv build/Telegram bin/Telegram
 
