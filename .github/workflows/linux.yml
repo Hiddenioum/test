@@ -20,9 +20,9 @@ jobs:
       - name: Checkout repo.
         uses: actions/checkout@v4
 
-      - name: Clone official Telegram Desktop v7.0.5.
+      - name: Clone official Telegram Desktop v7.1.3.
         run: |
-          git clone --recursive --branch v7.0.5 https://github.com/telegramdesktop/tdesktop.git tdesktop-src
+          git clone --recursive --branch v7.1.3 https://github.com/telegramdesktop/tdesktop.git tdesktop-src
           cp -r tdesktop-src/* .
           cp -r tdesktop-src/.* . 2>/dev/null || true
           rm -rf tdesktop-src
@@ -47,9 +47,7 @@ jobs:
 
       - name: Build Telegram Desktop.
         run: |
-          sudo rm -rf build
           mkdir -p build
-          sudo chmod 777 build
           docker run --rm \
             -v "$(pwd)":/usr/src/tdesktop \
             -w /usr/src/tdesktop \
@@ -64,12 +62,16 @@ jobs:
                 .. && \
               ninja
             "
-          sudo chmod -R 777 build
+
+      - name: Move artifact.
+        run: |
+          mkdir -p bin
+          mv build/bin/Telegram bin/Telegram || mv build/Telegram bin/Telegram
 
       - name: Upload artifact.
         uses: actions/upload-artifact@v4
         if: env.UPLOAD_ARTIFACT == 'true'
         with:
           name: ${{ env.ARTIFACT_NAME }}
-          path: build/bin/Telegram
+          path: bin/Telegram
           if-no-files-found: error

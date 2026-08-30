@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
+"""
+Custom Telegram Desktop feature patcher.
+Targets: tdesktop v7.1.3 (and compatible).
+"""
 import os
 import sys
 
-def patch_file(filepath, target, replacement):
+def patch_file(filepath, target, replacement, allow_missing=False):
     if not os.path.exists(filepath):
-        print(f"Skipping missing file: {filepath}")
-        return False
+        if allow_missing:
+            print(f"Skipping missing file: {filepath}")
+            return False
+        raise RuntimeError(f"File not found: {filepath}")
     with open(filepath, "r", encoding="utf-8") as f:
         content = f.read()
     if target not in content:
+        if allow_missing:
+            print(f"Warning: target not found in {filepath}: {repr(target[:80])}")
+            return False
         raise RuntimeError(f"Target string not found in {filepath}: {repr(target[:80])}")
     content = content.replace(target, replacement, 1)
     with open(filepath, "w", encoding="utf-8") as f:
@@ -16,11 +25,12 @@ def patch_file(filepath, target, replacement):
     print(f"Patched {filepath} successfully.")
     return True
 
+
 def main():
-    print("Applying custom features for Telegram Desktop v7.0.5...")
+    print("Applying custom features for Telegram Desktop v7.1.3...")
 
     # =========================================================================
-    # 1. Ghost Mode: Block typing indicators
+    # 1. Ghost Mode: Block typing indicators (api_send_progress.cpp)
     # =========================================================================
     patch_file(
         "Telegram/SourceFiles/api/api_send_progress.cpp",
@@ -34,7 +44,7 @@ def main():
     )
 
     # =========================================================================
-    # 2. Core Settings: Ghost Mode, Silent, Paused globals
+    # 2. Core Settings: Ghost Mode global flag (core_settings.h)
     # =========================================================================
     patch_file(
         "Telegram/SourceFiles/core/core_settings.h",
@@ -48,7 +58,7 @@ def main():
     )
 
     # =========================================================================
-    # 3. Ghost Mode: Block read receipts
+    # 3. Ghost Mode: Block read receipts (data_histories.cpp)
     # =========================================================================
     patch_file(
         "Telegram/SourceFiles/data/data_histories.cpp",
@@ -62,7 +72,7 @@ def main():
     )
 
     # =========================================================================
-    # 4. Anti-Delete: Preserve locally deleted messages (set flag only)
+    # 4. Anti-Delete: Mark messages as locally deleted instead of destroying them
     # =========================================================================
     patch_file(
         "Telegram/SourceFiles/data/data_session.cpp",
@@ -71,8 +81,8 @@ def main():
     )
     patch_file(
         "Telegram/SourceFiles/data/data_session.cpp",
-        "void Session::processNonChannelMessagesDeleted(const QVector<MTPint> &data) {",
-        "void Session::processNonChannelMessagesDeleted(const QVector<MTPint> &data) {\n\tfor (const auto &messageId : data) {\n\t\tif (const auto item = nonChannelMessage(messageId.v)) {\n\t\t\titem->setLocallyDeleted(true);\n\t\t}\n\t}\n\treturn;"
+        "void Session::processNonChannelMessagesDeleted(const QVector<MTPint> &data) {\n\tauto toDestroy = std::vector<not_null<HistoryItem*>>();\n\tauto historiesToCheck = base::flat_set<not_null<History*>>();\n\tfor (const auto &messageId : data) {\n\t\tif (const auto item = nonChannelMessage(messageId.v)) {\n\t\t\tconst auto history = item->history();\n\t\t\ttoDestroy.push_back(item);\n\t\t\thistoriesToCheck.emplace(history);\n\t\t}\n\t}\n\tif (!toDestroy.empty()) {\n\t\tnotifyItemsAboutToBeDestroyed(toDestroy);\n\t\tfor (const auto &item : toDestroy) {\n\t\t\titem->destroy();\n\t\t}\n\t}\n\tfor (const auto &history : historiesToCheck) {\n\t\tif (!history->chatListMessageKnown()) {\n\t\t\thistory->requestChatListMessage();\n\t\t}\n\t}\n}",
+        "void Session::processNonChannelMessagesDeleted(const QVector<MTPint> &data) {\n\tfor (const auto &messageId : data) {\n\t\tif (const auto item = nonChannelMessage(messageId.v)) {\n\t\t\titem->setLocallyDeleted(true);\n\t\t}\n\t}\n}"
     )
 
     # =========================================================================
@@ -114,12 +124,12 @@ def main():
     )
 
     # =========================================================================
-    # 7. HistoryItem: setLocallyDeleted (flag + resize), toggleOriginalEditVersion
+    # 7. HistoryItem: setLocallyDeleted + toggleOriginalEditVersion (cpp)
     # =========================================================================
     patch_file(
         "Telegram/SourceFiles/history/history_item.cpp",
         "HistoryItem::~HistoryItem() {",
-        "void HistoryItem::setLocallyDeleted(bool deleted) {\n\tif (_locallyDeleted != deleted) {\n\t\t_locallyDeleted = deleted;\n\t\thistory()->owner().requestItemResize(this);\n\t}\n}\n\nvoid HistoryItem::toggleOriginalEditVersion() {\n\tif (_originalEditText.text.isEmpty()) {\n\t\treturn;\n\t}\n\t_showingOriginal = !_showingOriginal;\n\tif (_showingOriginal) {\n\t\tsetText(_originalEditText);\n\t} else {\n\t\tsetText(_editedCurrentText);\n\t}\n\thistory()->owner().requestItemResize(this);\n}\n\nHistoryItem::~HistoryItem() {"
+        "void HistoryItem::setLocallyDeleted(bool deleted) {\n\tif (_locallyDeleted != deleted) {\n\t\t_locallyDeleted = deleted;\n\t\thistory()->owner().requestItemResize(this);\n\t}\n}\n\nvoid HistoryItem::toggleOriginalEditVersion() {\n\tif (_originalEditText.text.isEmpty()) {\n\t\treturn;\n\t}\n\t_showingOriginal = !_showingOriginal;\n\tif (_showingOriginal) {\n\t\tsetText(_originalEditText);\n\t} else {\n\t\tsetText(_editedCurrentText);\n\t}\n\thistory()->owner().requestItemTextRefresh(this);\n\thistory()->owner().requestItemResize(this);\n\thistory()->owner().requestItemRepaint(this);\n}\n\nHistoryItem::~HistoryItem() {"
     )
 
     # Save original text in applyEdition BEFORE the edit is applied
@@ -129,20 +139,20 @@ def main():
         "\tif (_originalEditText.text.isEmpty()) {\n\t\t_originalEditText = originalText();\n\t}\n\tconst auto &checkedMedia = updatingSavedLocalEdit"
     )
 
-    # Save edited text AFTER setText in applyEdition
+    # Save edited text AFTER setText in applyEdition (v7.1.3 anchor: useSameReplies)
     patch_file(
         "Telegram/SourceFiles/history/history_item.cpp",
-        "\t} else {\n\t\tsetText(std::move(updatedText));\n\t\taddToSharedMediaIndex();\n\t}\n\tif (mediaCheck == MediaCheckResult::Unsupported) {",
-        "\t} else {\n\t\tsetText(std::move(updatedText));\n\t\t_editedCurrentText = originalText();\n\t\taddToSharedMediaIndex();\n\t}\n\tif (mediaCheck == MediaCheckResult::Unsupported) {"
+        "\t} else {\n\t\tsetText(std::move(updatedText));\n\t\taddToSharedMediaIndex();\n\t}\n\tif (!edition.useSameReplies)",
+        "\t} else {\n\t\tsetText(std::move(updatedText));\n\t\t_editedCurrentText = originalText();\n\t\taddToSharedMediaIndex();\n\t}\n\tif (!edition.useSameReplies)"
     )
 
     # =========================================================================
-    # 8. BottomInfo: Add Deleted flag to enum
+    # 8. BottomInfo: Add Deleted flag to enum (0x4000 to avoid collision with Updated=0x2000)
     # =========================================================================
     patch_file(
         "Telegram/SourceFiles/history/view/history_view_bottom_info.h",
         "\t\t\tEphemeral      = 0x1000,",
-        "\t\t\tEphemeral      = 0x1000,\n\t\t\tDeleted        = 0x2000,"
+        "\t\t\tEphemeral      = 0x1000,\n\t\t\tDeleted        = 0x4000,"
     )
 
     # =========================================================================
@@ -164,7 +174,7 @@ def main():
     )
 
     # =========================================================================
-    # 11. BottomInfo: Click handler on edited tag to toggle original/edited text
+    # 11. BottomInfo: Click "Edited" label -> toggle original/current text
     # =========================================================================
     patch_file(
         "Telegram/SourceFiles/history/view/history_view_bottom_info.cpp",
@@ -173,7 +183,7 @@ def main():
     )
 
     # =========================================================================
-    # 12. Main Account: Per-account freeze (pausedForUi)
+    # 12. Main Account: Per-account freeze (pausedForUi) - header
     # =========================================================================
     patch_file(
         "Telegram/SourceFiles/main/main_account.h",
@@ -185,6 +195,7 @@ def main():
         "\tbool _loggingOut = false;",
         "\tbool _loggingOut = false;\n\tbool _pausedForUi = false;"
     )
+    # Per-account freeze - implementation
     patch_file(
         "Telegram/SourceFiles/main/main_account.cpp",
         "void Account::logOut() {",
@@ -192,14 +203,13 @@ def main():
     )
 
     # =========================================================================
-    # 13. Import tData: Recursive copy + Async folder picker (ABOVE Add Account)
+    # 13. Import tData: Recursive copy + async folder picker in AccountsList
     # =========================================================================
     patch_file(
         "Telegram/SourceFiles/settings/sections/settings_information.cpp",
         "#include \"settings/sections/settings_information.h\"",
-        "#include \"settings/sections/settings_information.h\"\n#include \"core/file_utilities.h\"\n#include \"core/application.h\"\n#include \"ui/toast/toast.h\"\n#include <QDir>\n#include <QFile>\n#include <QDirIterator>"
+        "#include \"settings/sections/settings_information.h\"\n#include \"core/file_utilities.h\"\n#include \"core/application.h\"\n#include \"ui/toast/toast.h\"\n#include \"data/notify/data_peer_notify_settings.h\"\n#include <QDir>\n#include <QFile>\n#include <QDirIterator>"
     )
-
     patch_file(
         "Telegram/SourceFiles/settings/sections/settings_information.cpp",
         "not_null<Ui::SlideWrap<Ui::SettingsButton>*> AccountsList::setupAdd() {",
@@ -223,12 +233,16 @@ def main():
         '\t\t\tQString(),\n'
         '\t\t\t[=](QString &&path) {\n'
         '\t\t\t\tif (!path.isEmpty()) {\n'
+        '\t\t\t\t\tauto src = path;\n'
+        '\t\t\t\t\tif (QDir(path + u"/tdata"_q).exists()) {\n'
+        '\t\t\t\t\t\tsrc = path + u"/tdata"_q;\n'
+        '\t\t\t\t\t}\n'
         '\t\t\t\t\tconst auto target = cWorkingDir() + u"tdata"_q;\n'
         '\t\t\t\t\tQDir().mkpath(target);\n'
-        '\t\t\t\t\tQDirIterator it(path, QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);\n'
+        '\t\t\t\t\tQDirIterator it(src, QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);\n'
         '\t\t\t\t\twhile (it.hasNext()) {\n'
         '\t\t\t\t\t\tit.next();\n'
-        '\t\t\t\t\t\tconst auto rel = QDir(path).relativeFilePath(it.filePath());\n'
+        '\t\t\t\t\t\tconst auto rel = QDir(src).relativeFilePath(it.filePath());\n'
         '\t\t\t\t\t\tconst auto dst = target + \'/\' + rel;\n'
         '\t\t\t\t\t\tif (it.fileInfo().isDir()) {\n'
         '\t\t\t\t\t\t\tQDir().mkpath(dst);\n'
@@ -245,16 +259,16 @@ def main():
     )
 
     # =========================================================================
-    # 14. Freeze Account in context menu (right-click on account in list)
+    # 14. Freeze Account & Mute All Chats in context menu (right-click on account)
     # =========================================================================
     patch_file(
         "Telegram/SourceFiles/settings/sections/settings_information.cpp",
-        "\t\t\tWindow::MenuAddMarkAsReadAllChatsAction(\n\t\t\t\tsession,\n\t\t\t\twindow->uiShow(),\n\t\t\t\taddAction);",
-        "\t\t\tWindow::MenuAddMarkAsReadAllChatsAction(\n\t\t\t\tsession,\n\t\t\t\twindow->uiShow(),\n\t\t\t\taddAction);\n\t\t\taddAction(session->account().pausedForUi() ? u\"Unfreeze Account\"_q : u\"Freeze Account\"_q, [=] {\n\t\t\t\tauto &account = session->account();\n\t\t\t\taccount.setPausedForUi(!account.pausedForUi());\n\t\t\t\tUi::Toast::Show(account.pausedForUi() ? u\"Account Frozen\"_q : u\"Account Unfrozen\"_q);\n\t\t\t}, &st::menuIconBlock);"
+        "\t\t\tMarkAsReadMenu::AddAllChatsAction(\n\t\t\t\tsession,\n\t\t\t\twindow->uiShow(),\n\t\t\t\taddAction);",
+        "\t\t\tMarkAsReadMenu::AddAllChatsAction(\n\t\t\t\tsession,\n\t\t\t\twindow->uiShow(),\n\t\t\t\taddAction);\n\t\t\taddAction(u\"Mute All Chats\"_q, [=] {\n\t\t\t\tconst auto owner = &session->data();\n\t\t\t\tfor (const auto &row : owner->chatsList()->indexed()->all()) {\n\t\t\t\t\tif (const auto history = row->history()) {\n\t\t\t\t\t\tsession->data().notifySettings().update(history->peer, Data::MuteValue{ .forever = true });\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t\tUi::Toast::Show(u\"All chats muted\"_q);\n\t\t\t}, &st::menuIconMute);\n\t\t\taddAction(session->account().pausedForUi() ? u\"Unfreeze Account\"_q : u\"Freeze Account\"_q, [=] {\n\t\t\t\tauto &account = session->account();\n\t\t\t\taccount.setPausedForUi(!account.pausedForUi());\n\t\t\t\tUi::Toast::Show(account.pausedForUi() ? u\"Account Frozen\"_q : u\"Account Unfrozen\"_q);\n\t\t\t}, &st::menuIconBlock);"
     )
 
     # =========================================================================
-    # 15. Ghost Mode: Right-click chat -> Open in Ghost Mode (activates + opens chat)
+    # 15. Ghost Mode: Right-click chat -> Open in Ghost Mode (in-place)
     # =========================================================================
     patch_file(
         "Telegram/SourceFiles/window/window_peer_menu.cpp",
@@ -264,10 +278,11 @@ def main():
     patch_file(
         "Telegram/SourceFiles/window/window_peer_menu.cpp",
         "void Filler::fillContextMenuActions() {",
-        "void Filler::fillContextMenuActions() {\n\tif (const auto history = _request.key.history()) {\n\t\tconst auto active = history->ghostModeActive();\n\t\tconst auto controller = _controller;\n\t\t_addAction(active ? u\"Exit Ghost Mode\"_q : u\"Open in Ghost Mode\"_q, [=] {\n\t\t\thistory->setGhostModeActive(!active);\n\t\t\tif (!active) {\n\t\t\t\tcontroller->showPeerHistory(history->peer->id);\n\t\t\t}\n\t\t\tUi::Toast::Show(!active ? u\"Ghost Mode Enabled\"_q : u\"Ghost Mode Disabled\"_q);\n\t\t}, &st::menuIconBlock);\n\t}"
+        "void Filler::fillContextMenuActions() {\n\tif (const auto history = _request.key.history()) {\n\t\tconst auto active = history->ghostModeActive();\n\t\tconst auto controller = _controller;\n\t\t_addAction(active ? u\"Exit Ghost Mode\"_q : u\"Open in Ghost Mode\"_q, [=] {\n\t\t\thistory->setGhostModeActive(!active);\n\t\t\tif (!active) {\n\t\t\t\tcontroller->showPeerHistory(history->peer->id);\n\t\t\t}\n\t\t\tUi::Toast::Show(!active ? u\"Ghost Mode Enabled\"_q : u\"Ghost Mode Disabled\"_q);\n\t\t}, &st::menuIconStealth);\n\t}"
     )
 
-    print("All custom UI & core features applied successfully!")
+    print("\n✅ All custom UI & core features applied successfully for v7.1.3!")
+
 
 if __name__ == "__main__":
     main()
