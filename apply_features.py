@@ -208,7 +208,7 @@ def main():
     patch_file(
         "Telegram/SourceFiles/settings/sections/settings_information.cpp",
         "#include \"settings/sections/settings_information.h\"",
-        "#include \"settings/sections/settings_information.h\"\n#include \"core/file_utilities.h\"\n#include \"core/application.h\"\n#include \"ui/toast/toast.h\"\n#include \"data/notify/data_peer_notify_settings.h\"\n#include <QDir>\n#include <QFile>\n#include <QDirIterator>"
+        "#include \"settings/sections/settings_information.h\"\n#include \"core/file_utilities.h\"\n#include \"core/application.h\"\n#include \"ui/toast/toast.h\"\n#include \"history/history.h\"\n#include \"data/notify/data_notify_settings.h\"\n#include \"data/notify/data_peer_notify_settings.h\"\n#include <QDir>\n#include <QFile>\n#include <QDirIterator>"
     )
     patch_file(
         "Telegram/SourceFiles/settings/sections/settings_information.cpp",
@@ -244,13 +244,13 @@ def main():
         '\t\t\t\t\t\tit.next();\n'
         '\t\t\t\t\t\tconst auto rel = QDir(src).relativeFilePath(it.filePath());\n'
         '\t\t\t\t\t\tconst auto dst = target + \'/\' + rel;\n'
-        '\t\t\t\t\t\tif (it.fileInfo().isDir()) {\n'
-        '\t\t\t\t\t\t\tQDir().mkpath(dst);\n'
-        '\t\t\t\t\t\t} else {\n'
-        '\t\t\t\t\t\t\tQDir().mkpath(QFileInfo(dst).path());\n'
-        '\t\t\t\t\t\t\tQFile::remove(dst);\n'
-        '\t\t\t\t\t\t\tQFile::copy(it.filePath(), dst);\n'
-        '\t\t\t\t\t\t}\n'
+        '\t\t\t\t\tif (it.fileInfo().isDir()) {\n'
+        '\t\t\t\t\t\tQDir().mkpath(dst);\n'
+        '\t\t\t\t\t} else {\n'
+        '\t\t\t\t\t\tQDir().mkpath(QFileInfo(dst).path());\n'
+        '\t\t\t\t\t\tQFile::remove(dst);\n'
+        '\t\t\t\t\t\tQFile::copy(it.filePath(), dst);\n'
+        '\t\t\t\t\t}\n'
         '\t\t\t\t\t}\n'
         '\t\t\t\t\tUi::Toast::Show(u"tData Imported! Please restart Telegram."_q);\n'
         '\t\t\t\t}\n'
@@ -263,8 +263,8 @@ def main():
     # =========================================================================
     patch_file(
         "Telegram/SourceFiles/settings/sections/settings_information.cpp",
-        "\t\t\tMarkAsReadMenu::AddAllChatsAction(\n\t\t\t\tsession,\n\t\t\t\twindow->uiShow(),\n\t\t\t\taddAction);",
-        "\t\t\tMarkAsReadMenu::AddAllChatsAction(\n\t\t\t\tsession,\n\t\t\t\twindow->uiShow(),\n\t\t\t\taddAction);\n\t\t\taddAction(u\"Mute All Chats\"_q, [=] {\n\t\t\t\tconst auto owner = &session->data();\n\t\t\t\tfor (const auto &row : owner->chatsList()->indexed()->all()) {\n\t\t\t\t\tif (const auto history = row->history()) {\n\t\t\t\t\t\tsession->data().notifySettings().update(history->peer, Data::MuteValue{ .forever = true });\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t\tUi::Toast::Show(u\"All chats muted\"_q);\n\t\t\t}, &st::menuIconMute);\n\t\t\taddAction(session->account().pausedForUi() ? u\"Unfreeze Account\"_q : u\"Freeze Account\"_q, [=] {\n\t\t\t\tauto &account = session->account();\n\t\t\t\taccount.setPausedForUi(!account.pausedForUi());\n\t\t\t\tUi::Toast::Show(account.pausedForUi() ? u\"Account Frozen\"_q : u\"Account Unfrozen\"_q);\n\t\t\t}, &st::menuIconBlock);"
+        "\t\t\tMarkAsReadMenu::AddAllChatsAction(\n\t\t\tsession,\n\t\t\twindow->uiShow(),\n\t\t\taddAction);",
+        "\t\t\tMarkAsReadMenu::AddAllChatsAction(\n\t\t\tsession,\n\t\t\twindow->uiShow(),\n\t\t\taddAction);\n\t\t\taddAction(u\"Mute All Chats\"_q, [=] {\n\t\t\t\tconst auto owner = &session->data();\n\t\t\t\tfor (const auto &row : owner->chatsList()->indexed()->all()) {\n\t\t\t\t\tif (const auto history = row->history()) {\n\t\t\t\t\t\tsession->data().notifySettings().update(history->peer, Data::MuteValue{ .forever = true });\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t\tUi::Toast::Show(u\"All chats muted\"_q);\n\t\t\t}, &st::menuIconMute);\n\t\t\taddAction(session->account().pausedForUi() ? u\"Unfreeze Account\"_q : u\"Freeze Account\"_q, [=] {\n\t\t\t\tauto &account = session->account();\n\t\t\t\taccount.setPausedForUi(!account.pausedForUi());\n\t\t\t\tUi::Toast::Show(account.pausedForUi() ? u\"Account Frozen\"_q : u\"Account Unfrozen\"_q);\n\t\t\t}, &st::menuIconBlock);"
     )
 
     # =========================================================================
