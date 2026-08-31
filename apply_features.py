@@ -282,12 +282,12 @@ def main():
     )
 
     # =========================================================================
-    # 16. Multi-Account: Support up to 200 accounts in tData (kMaxAccounts / kPremiumMaxAccounts)
+    # 16. Multi-Account: Support unlimited accounts in tData (kMaxAccounts / kPremiumMaxAccounts = 1,000,000)
     # =========================================================================
     patch_file(
         "Telegram/SourceFiles/main/main_domain.h",
         "\tstatic constexpr auto kMaxAccounts = 3;\n\tstatic constexpr auto kPremiumMaxAccounts = 6;",
-        "\tstatic constexpr auto kMaxAccounts = 100;\n\tstatic constexpr auto kPremiumMaxAccounts = 200;"
+        "\tstatic constexpr auto kMaxAccounts = 1000000;\n\tstatic constexpr auto kPremiumMaxAccounts = 1000000;"
     )
 
     print("\n✅ All custom UI & core features applied successfully for v7.1.3!")
