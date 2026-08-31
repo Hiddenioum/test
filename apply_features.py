@@ -115,7 +115,7 @@ def main():
     patch_file(
         "Telegram/SourceFiles/history/history_item.h",
         "\t[[nodiscard]] bool out() const {",
-        "\t[[nodiscard]] bool locallyDeleted() const {\n\t\treturn _locallyDeleted;\n\t}\n\tvoid setLocallyDeleted(bool deleted);\n\tvoid toggleOriginalEditVersion();\n\n\t[[nodiscard]] bool out() const {"
+        "\t[[nodiscard]] bool locallyDeleted() const {\n\t\treturn _locallyDeleted;\n\t}\n\tvoid setLocallyDeleted(bool deleted);\n\ttoggleOriginalEditVersion();\n\n\t[[nodiscard]] bool out() const {"
     )
     patch_file(
         "Telegram/SourceFiles/history/history_item.h",
@@ -279,6 +279,15 @@ def main():
         "Telegram/SourceFiles/window/window_peer_menu.cpp",
         "void Filler::fillContextMenuActions() {",
         "void Filler::fillContextMenuActions() {\n\tif (const auto history = _request.key.history()) {\n\t\tconst auto active = history->ghostModeActive();\n\t\tconst auto controller = _controller;\n\t\t_addAction(active ? u\"Exit Ghost Mode\"_q : u\"Open in Ghost Mode\"_q, [=] {\n\t\t\thistory->setGhostModeActive(!active);\n\t\t\tif (!active) {\n\t\t\t\tcontroller->showPeerHistory(history->peer->id);\n\t\t\t}\n\t\t\tUi::Toast::Show(!active ? u\"Ghost Mode Enabled\"_q : u\"Ghost Mode Disabled\"_q);\n\t\t}, &st::menuIconStealth);\n\t}"
+    )
+
+    # =========================================================================
+    # 16. Multi-Account: Support up to 200 accounts in tData (kMaxAccounts / kPremiumMaxAccounts)
+    # =========================================================================
+    patch_file(
+        "Telegram/SourceFiles/main/main_domain.h",
+        "\tstatic constexpr auto kMaxAccounts = 3;\n\tstatic constexpr auto kPremiumMaxAccounts = 6;",
+        "\tstatic constexpr auto kMaxAccounts = 100;\n\tstatic constexpr auto kPremiumMaxAccounts = 200;"
     )
 
     print("\n✅ All custom UI & core features applied successfully for v7.1.3!")
