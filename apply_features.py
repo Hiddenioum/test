@@ -289,6 +289,16 @@ def main():
         "\tstatic constexpr auto kMaxAccounts = 3;\n\tstatic constexpr auto kPremiumMaxAccounts = 6;",
         "\tstatic constexpr auto kMaxAccounts = 1000000;\n\tstatic constexpr auto kPremiumMaxAccounts = 1000000;"
     )
+    patch_file(
+        "Telegram/SourceFiles/storage/storage_domain.cpp",
+        "\tif (count <= 0 || count > Main::Domain::kPremiumMaxAccounts) {",
+        "\tif (count <= 0) {"
+    )
+    patch_file(
+        "Telegram/SourceFiles/storage/storage_domain.cpp",
+        "\t\tif (index >= 0\n\t\t\t&& index < Main::Domain::kPremiumMaxAccounts\n\t\t\t&& tried.emplace(index).second) {",
+        "\t\tif (index >= 0\n\t\t\t&& tried.emplace(index).second) {"
+    )
 
     print("\n✅ All custom UI & core features applied successfully for v7.1.3!")
 
