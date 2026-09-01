@@ -115,7 +115,7 @@ def main():
     patch_file(
         "Telegram/SourceFiles/history/history_item.h",
         "\t[[nodiscard]] bool out() const {",
-        "\t[[nodiscard]] bool locallyDeleted() const {\n\t\treturn _locallyDeleted;\n\t}\n\tvoid setLocallyDeleted(bool deleted);\n\tvoid toggleOriginalEditVersion();\n\n\t[[nodiscard]] bool out() const {"
+        "\t[[nodiscard]] bool locallyDeleted() const {\n\t\treturn _locallyDeleted;\n\t}\n\tvoid setLocallyDeleted(bool deleted);\n\ttoggleOriginalEditVersion();\n\n\t[[nodiscard]] bool out() const {"
     )
     patch_file(
         "Telegram/SourceFiles/history/history_item.h",
@@ -266,9 +266,8 @@ def main():
         '\t\t\t\t\tif (baseHex.length() == 16) {\n'
         '\t\t\t\t\t\tfoundHex.emplace(baseHex);\n'
         '\t\t\t\t\t}\n'
-        '\t\t\t\t}\n'
-        '\t\t\t\tauto accountIdx = 1;\n'
-        '\t\t\t\tfor (const auto &hex : foundHex) {\n'
+        '\t\t\t\t\tauto accountIdx = 1;\n'
+        '\t\t\t\t\tfor (const auto &hex : foundHex) {\n'
         '\t\t\t\t\tAccountCandidate c;\n'
         '\t\t\t\t\tc.folderName = hex;\n'
         '\t\t\t\t\tc.hasDir = srcDir.exists(hex);\n'
@@ -317,7 +316,7 @@ def main():
         '\t\t\t\t\t\t\tlabelText,\n'
         '\t\t\t\t\t\t\tisChecked));\n'
         '\t\t\t\t\t}\n'
-        '\t\t\t\t\tbox->addButton(u"Import Selected"_q, [=] {\n'
+        '\t\t\t\t\tbox->addButton(rpl::single(u"Import Selected"_q), [=] {\n'
         '\t\t\t\t\t\tauto importedCount = 0;\n'
         '\t\t\t\t\t\tfor (const auto &cand : *candidates) {\n'
         '\t\t\t\t\t\t\tif (cand.checkbox && cand.checkbox->checked()) {\n'
