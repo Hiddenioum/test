@@ -115,7 +115,7 @@ def main():
     patch_file(
         "Telegram/SourceFiles/history/history_item.h",
         "\t[[nodiscard]] bool out() const {",
-        "\t[[nodiscard]] bool locallyDeleted() const {\n\t\treturn _locallyDeleted;\n\t}\n\tvoid setLocallyDeleted(bool deleted);\n\ttoggleOriginalEditVersion();\n\n\t[[nodiscard]] bool out() const {"
+        "\t[[nodiscard]] bool locallyDeleted() const {\n\t\treturn _locallyDeleted;\n\t}\n\tvoid setLocallyDeleted(bool deleted);\n\tvoid toggleOriginalEditVersion();\n\n\t[[nodiscard]] bool out() const {"
     )
     patch_file(
         "Telegram/SourceFiles/history/history_item.h",
