@@ -142,7 +142,7 @@ def main():
     # Save edited text AFTER setText in applyEdition (v7.1.3 anchor: useSameReplies)
     patch_file(
         "Telegram/SourceFiles/history/history_item.cpp",
-        "\t} else {\n\t\tsetText(std::move(updatedText));\n\t\t_editedCurrentText = originalText();\n\t\taddToSharedMediaIndex();\n\t}\n\tif (!edition.useSameReplies)",
+        "\t} else {\n\t\tsetText(std::move(updatedText));\n\t\taddToSharedMediaIndex();\n\t}\n\tif (!edition.useSameReplies)",
         "\t} else {\n\t\tsetText(std::move(updatedText));\n\t\t_editedCurrentText = originalText();\n\t\taddToSharedMediaIndex();\n\t}\n\tif (!edition.useSameReplies)"
     )
 
