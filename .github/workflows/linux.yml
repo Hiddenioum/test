@@ -3,33 +3,33 @@ name: Linux Build Workflow
 on:
   push:
     branches:
-      - main
+      - '**'
   workflow_dispatch:
 
 jobs:
   build-linux:
     runs-on: ubuntu-latest
-    name: Build Custom Telegram Linux
+    name: Build Telegram v7.2.9 Unlimited Accounts
 
     env:
       UPLOAD_ARTIFACT: "true"
       IMAGE_TAG: tdesktop:centos_env
-      ARTIFACT_NAME: "Telegram-Custom-Linux"
+      ARTIFACT_NAME: "Telegram-v7.2.9-Unlimited-Linux"
 
     steps:
       - name: Checkout repo.
         uses: actions/checkout@v4
 
-      - name: Clone official Telegram Desktop v7.1.3.
+      - name: Clone official Telegram Desktop v7.2.9.
         run: |
-          git clone --recursive --branch v7.1.3 https://github.com/telegramdesktop/tdesktop.git tdesktop-src
+          git clone --recursive --branch v7.2.9 https://github.com/telegramdesktop/tdesktop.git tdesktop-src
           cp -r tdesktop-src/* .
           cp -r tdesktop-src/.* . 2>/dev/null || true
           rm -rf tdesktop-src
 
-      - name: Apply Custom Features.
+      - name: Apply Unlimited Accounts Patch.
         run: |
-          python3 apply_features.py
+          python3 apply_unlimited.py
 
       - name: Set up API keys in config.h.
         run: |
