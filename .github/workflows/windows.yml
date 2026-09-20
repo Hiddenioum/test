@@ -1,0 +1,116 @@
+name: Windows Build Workflow
+
+on:
+  push:
+    branches:
+      - '**'
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Build Telegram v7.2.9 Unlimited Accounts (Windows x64)
+    runs-on: windows-latest
+
+    env:
+      UPLOAD_ARTIFACT: "true"
+      ONLY_CACHE: "false"
+      ARTIFACT_NAME: "Telegram-v7.2.9-Unlimited-Windows-x64"
+
+    defaults:
+      run:
+        shell: cmd
+
+    steps:
+      - name: Checkout repo.
+        uses: actions/checkout@v4
+
+      - name: Prepare directories.
+        run: |
+          mkdir %userprofile%\TBuild\Libraries\win64
+          mkdir %userprofile%\TBuild\ThirdParty
+          mklink /d %GITHUB_WORKSPACE%\TBuild %userprofile%\TBuild
+          echo TBUILD=%GITHUB_WORKSPACE%\TBuild>>%GITHUB_ENV%
+          echo LibrariesPath=%GITHUB_WORKSPACE%\TBuild\Libraries\win64>>%GITHUB_ENV%
+
+      - name: Clone official Telegram Desktop v7.2.9.
+        shell: bash
+        run: |
+          git clone --recursive --branch v7.2.9 https://github.com/telegramdesktop/tdesktop.git "$TBUILD/tdesktop"
+
+      - name: Apply Unlimited Accounts Patch.
+        shell: bash
+        run: |
+          cd "$TBUILD/tdesktop"
+          cp "$GITHUB_WORKSPACE/apply_unlimited.py" .
+          python3 apply_unlimited.py
+
+      - name: Set up API keys in config.h.
+        shell: bash
+        run: |
+          cd "$TBUILD/tdesktop"
+          sed -i 's/#error You are required to provide API_ID and API_HASH./constexpr auto ApiId = 29579556; constexpr auto ApiHash = "351a588e027c04b1b5a1c2b28cbd9cfd";/' Telegram/SourceFiles/config.h
+
+      - name: Setup MSVC developer environment.
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: NuGet sources.
+        run: |
+          nuget sources Disable -Name "Microsoft Visual Studio Offline Packages"
+          nuget sources Add -Source https://api.nuget.org/v3/index.json & exit 0
+
+      - name: ThirdParty cache.
+        id: cache-third-party
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TBUILD }}\ThirdParty
+          key: ${{ runner.OS }}-x64-third-party-v729
+          restore-keys: ${{ runner.OS }}-x64-third-party-
+
+      - name: Libraries cache.
+        id: cache-libs
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.LibrariesPath }}\*
+            !${{ env.LibrariesPath }}\cache_keys
+            ${{ env.LibrariesPath }}\cache_keys\*
+          key: ${{ runner.OS }}-x64-libs-v729
+          restore-keys: ${{ runner.OS }}-x64-libs-
+
+      - name: Prepare Libraries.
+        run: |
+          cd %TBUILD%\tdesktop\Telegram\build\prepare
+          python prepare.py skip-release silent
+
+      - name: Configure CMake.
+        run: |
+          cd %TBUILD%\tdesktop\Telegram
+          call configure.bat x64 -D TDESKTOP_API_ID=29579556 -D TDESKTOP_API_HASH=351a588e027c04b1b5a1c2b28cbd9cfd
+
+      - name: Build Telegram Desktop.
+        run: |
+          cd %TBUILD%\tdesktop
+          cmake --build out --config Release --parallel
+
+      - name: Move artifact.
+        run: |
+          mkdir %GITHUB_WORKSPACE%\bin
+          if exist %TBUILD%\tdesktop\out\Release\Telegram.exe (
+            move %TBUILD%\tdesktop\out\Release\Telegram.exe %GITHUB_WORKSPACE%\bin\Telegram.exe
+          ) else if exist %TBUILD%\tdesktop\out\Telegram.exe (
+            move %TBUILD%\tdesktop\out\Telegram.exe %GITHUB_WORKSPACE%\bin\Telegram.exe
+          ) else if exist %TBUILD%\tdesktop\out\Debug\Telegram.exe (
+            move %TBUILD%\tdesktop\out\Debug\Telegram.exe %GITHUB_WORKSPACE%\bin\Telegram.exe
+          ) else (
+            dir /s /b %TBUILD%\tdesktop\out\*.exe
+            exit /b 1
+          )
+
+      - name: Upload artifact.
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: bin/Telegram.exe
+          if-no-files-found: error
