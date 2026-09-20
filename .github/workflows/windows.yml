@@ -87,22 +87,22 @@ jobs:
       - name: Configure CMake.
         run: |
           cd %TBUILD%\tdesktop\Telegram
-          call configure.bat x64 -D TDESKTOP_API_ID=29579556 -D TDESKTOP_API_HASH=351a588e027c04b1b5a1c2b28cbd9cfd
+          call configure.bat x64 -D CMAKE_CONFIGURATION_TYPES=Debug -D TDESKTOP_API_ID=29579556 -D TDESKTOP_API_HASH=351a588e027c04b1b5a1c2b28cbd9cfd
 
       - name: Build Telegram Desktop.
         run: |
           cd %TBUILD%\tdesktop
-          cmake --build out --config Release --parallel
+          cmake --build out --config Debug --parallel
 
       - name: Move artifact.
         run: |
           mkdir %GITHUB_WORKSPACE%\bin
-          if exist %TBUILD%\tdesktop\out\Release\Telegram.exe (
+          if exist %TBUILD%\tdesktop\out\Debug\Telegram.exe (
+            move %TBUILD%\tdesktop\out\Debug\Telegram.exe %GITHUB_WORKSPACE%\bin\Telegram.exe
+          ) else if exist %TBUILD%\tdesktop\out\Release\Telegram.exe (
             move %TBUILD%\tdesktop\out\Release\Telegram.exe %GITHUB_WORKSPACE%\bin\Telegram.exe
           ) else if exist %TBUILD%\tdesktop\out\Telegram.exe (
             move %TBUILD%\tdesktop\out\Telegram.exe %GITHUB_WORKSPACE%\bin\Telegram.exe
-          ) else if exist %TBUILD%\tdesktop\out\Debug\Telegram.exe (
-            move %TBUILD%\tdesktop\out\Debug\Telegram.exe %GITHUB_WORKSPACE%\bin\Telegram.exe
           ) else (
             dir /s /b %TBUILD%\tdesktop\out\*.exe
             exit /b 1
