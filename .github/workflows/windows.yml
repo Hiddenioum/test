@@ -34,7 +34,7 @@ jobs:
           Get-PSDrive -PSProvider FileSystem
 
           Write-Host "Disabling Windows Defender scanning for build paths..."
-          Set-MpPreference -ExclusionPath "C:\Users\runneradmin", "$env:GITHUB_WORKSPACE", "$env:TEMP" -ErrorAction SilentlyContinue
+          Set-MpPreference -ExclusionPath "C:\Users\runneradmin", "D:\TBuild", "$env:GITHUB_WORKSPACE", "$env:TEMP" -ErrorAction SilentlyContinue
 
           Write-Host "Removing unneeded SDKs, runtimes, and toolchains..."
           $paths = @(
@@ -70,11 +70,11 @@ jobs:
 
       - name: Prepare directories.
         run: |
-          mkdir %userprofile%\TBuild\Libraries\win64
-          mkdir %userprofile%\TBuild\ThirdParty
-          mklink /d %GITHUB_WORKSPACE%\TBuild %userprofile%\TBuild
-          echo TBUILD=%GITHUB_WORKSPACE%\TBuild>>%GITHUB_ENV%
-          echo LibrariesPath=%GITHUB_WORKSPACE%\TBuild\Libraries\win64>>%GITHUB_ENV%
+          mkdir D:\TBuild\Libraries\win64
+          mkdir D:\TBuild\ThirdParty
+          mklink /d %GITHUB_WORKSPACE%\TBuild D:\TBuild
+          echo TBUILD=D:\TBuild>>%GITHUB_ENV%
+          echo LibrariesPath=D:\TBuild\Libraries\win64>>%GITHUB_ENV%
 
       - name: Clone official Telegram Desktop v7.4.3.
         shell: bash
@@ -141,7 +141,10 @@ jobs:
 
       - name: Free up disk space in Libraries.
         shell: bash
-        run: find $LibrariesPath '(' '(' ! '(' -name '*.lib' -o -name '*.a' -o -name '*.exe' -o -name '*.h' -o -name '*.hpp' -o -name '*.inc' -o -name '*.cmake' -o -name '*.pc' -o -path '*/include/*' -o -path '*/objects-*' -o -path '*/cache_keys/*' -o -path '*/patches/*' -o -path '*/nv-codec-headers/*' ')' -type f ')' -o -empty ')' -delete
+        run: |
+          LIBS_UNIX="$(cygpath -u "$LibrariesPath")"
+          find "$LIBS_UNIX" '(' '(' ! '(' -name '*.lib' -o -name '*.a' -o -name '*.dll' -o -name '*.exe' -o -name '*.h' -o -name '*.hpp' -o -name '*.inc' -o -name '*.cmake' -o -name '*.pc' -o -path '*/include/*' -o -path '*/objects-*' -o -path '*/cache_keys/*' -o -path '*/patches/*' -o -path '*/nv-codec-headers/*' -o -path '*/tdesktop_rust/out/*' -o -path '*/out/src/*' ')' -type f ')' -o -empty ')' -delete
+          ls -la "$LIBS_UNIX/tdesktop_rust/out/src/wallet_engine/wallet_engine.cpp"
 
       - name: Telegram Desktop build.
         run: |
