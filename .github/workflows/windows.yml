@@ -8,13 +8,13 @@ on:
 
 jobs:
   build-windows:
-    name: Build Telegram v7.2.9 Unlimited Accounts (Windows x64)
+    name: Build Telegram v7.4.3 Unlimited Accounts (Windows x64)
     runs-on: windows-latest
 
     env:
       UPLOAD_ARTIFACT: "true"
       ONLY_CACHE: "false"
-      ARTIFACT_NAME: "Telegram-v7.2.9-Unlimited-Windows-x64"
+      ARTIFACT_NAME: "Telegram-v7.4.3-Unlimited-Windows-x64"
 
     defaults:
       run:
@@ -32,10 +32,10 @@ jobs:
           echo TBUILD=%GITHUB_WORKSPACE%\TBuild>>%GITHUB_ENV%
           echo LibrariesPath=%GITHUB_WORKSPACE%\TBuild\Libraries\win64>>%GITHUB_ENV%
 
-      - name: Clone official Telegram Desktop v7.2.9.
+      - name: Clone official Telegram Desktop v7.4.3.
         shell: bash
         run: |
-          git clone --recursive --branch v7.2.9 https://github.com/telegramdesktop/tdesktop.git "$TBUILD/tdesktop"
+          git clone --recursive --branch v7.4.3 https://github.com/telegramdesktop/tdesktop.git "$TBUILD/tdesktop"
 
       - name: Apply Unlimited Accounts Patch.
         shell: bash
@@ -50,10 +50,21 @@ jobs:
           cd "$TBUILD/tdesktop"
           sed -i 's/#error You are required to provide API_ID and API_HASH./constexpr auto ApiId = 29579556; constexpr auto ApiHash = "351a588e027c04b1b5a1c2b28cbd9cfd";/' Telegram/SourceFiles/config.h
 
+      - name: First set up & SDK detection.
+        shell: bash
+        run: |
+          DOCPATH=$TBUILD/tdesktop/docs/building-win.md
+          SDK="$(grep "SDK version" $DOCPATH | sed -r 's/.*\*\*(.*)\*\* SDK version.*/\1/')"
+          echo "SDK=$SDK" >> $GITHUB_ENV
+          echo "Windows SDK detected: $SDK"
+          sed -i '/CMAKE_${lang}_FLAGS_DEBUG_INIT/s/${_Zi}//' "$PROGRAMFILES"/CMake/share/cmake*/Modules/Platform/Windows-MSVC.cmake
+
       - name: Setup MSVC developer environment.
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: Eden-CI/msvc-dev-cmd@master
         with:
           arch: x64
+          sdk: ${{ env.SDK }}
+          toolset: '14.44'
 
       - name: NuGet sources.
         run: |
@@ -65,7 +76,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.TBUILD }}\ThirdParty
-          key: ${{ runner.OS }}-x64-third-party-v729
+          key: ${{ runner.OS }}-x64-third-party-v743
           restore-keys: ${{ runner.OS }}-x64-third-party-
 
       - name: Libraries cache.
@@ -76,7 +87,7 @@ jobs:
             ${{ env.LibrariesPath }}\*
             !${{ env.LibrariesPath }}\cache_keys
             ${{ env.LibrariesPath }}\cache_keys\*
-          key: ${{ runner.OS }}-x64-libs-v729
+          key: ${{ runner.OS }}-x64-libs-v743
           restore-keys: ${{ runner.OS }}-x64-libs-
 
       - name: Prepare Libraries.
@@ -84,15 +95,25 @@ jobs:
           cd %TBUILD%\tdesktop\Telegram\build\prepare
           python prepare.py skip-release silent
 
-      - name: Configure CMake.
+      - name: Free up disk space in Libraries.
+        shell: bash
+        run: find $LibrariesPath '(' '(' ! '(' -name '*.lib' -o -name '*.a' -o -name '*.exe' -o -name '*.h' -o -name '*.hpp' -o -name '*.inc' -o -name '*.cmake' -o -name '*.pc' -o -path '*/include/*' -o -path '*/objects-*' -o -path '*/cache_keys/*' -o -path '*/patches/*' -o -path '*/nv-codec-headers/*' ')' -type f ')' -o -empty ')' -delete
+
+      - name: Telegram Desktop build.
         run: |
           cd %TBUILD%\tdesktop\Telegram
-          call configure.bat x64 -D CMAKE_CONFIGURATION_TYPES=Debug -D TDESKTOP_API_ID=29579556 -D TDESKTOP_API_HASH=351a588e027c04b1b5a1c2b28cbd9cfd
 
-      - name: Build Telegram Desktop.
-        run: |
-          cd %TBUILD%\tdesktop
-          cmake --build out --config Debug --parallel
+          call configure.bat ^
+            -G "Ninja Multi-Config" ^
+            -D TDESKTOP_API_ID=29579556 ^
+            -D TDESKTOP_API_HASH=351a588e027c04b1b5a1c2b28cbd9cfd ^
+            -D CMAKE_CONFIGURATION_TYPES=Debug ^
+            -D CMAKE_COMPILE_WARNING_AS_ERROR=OFF ^
+            -D CMAKE_MSVC_DEBUG_INFORMATION_FORMAT= ^
+            -D DESKTOP_APP_DISABLE_AUTOUPDATE=OFF ^
+            -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF
+
+          cmake --build ..\out --config Debug --parallel
 
       - name: Move artifact.
         run: |
