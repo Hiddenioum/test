@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - '**'
+    paths:
+      - '.github/workflows/linux.yml'
+      - 'apply_unlimited.py'
   workflow_dispatch:
 
 jobs:

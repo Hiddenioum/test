@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - '**'
+    paths:
+      - '.github/workflows/windows.yml'
+      - 'apply_unlimited.py'
   workflow_dispatch:
 
 jobs:
@@ -23,6 +26,47 @@ jobs:
     steps:
       - name: Checkout repo.
         uses: actions/checkout@v4
+
+      - name: Free up runner disk space.
+        shell: pwsh
+        run: |
+          Write-Host "=== Free space BEFORE cleanup ==="
+          Get-PSDrive -PSProvider FileSystem
+
+          Write-Host "Disabling Windows Defender scanning for build paths..."
+          Set-MpPreference -ExclusionPath "C:\Users\runneradmin", "$env:GITHUB_WORKSPACE", "$env:TEMP" -ErrorAction SilentlyContinue
+
+          Write-Host "Removing unneeded SDKs, runtimes, and toolchains..."
+          $paths = @(
+              "C:\Android",
+              "C:\Program Files (x86)\Android",
+              "$env:LOCALAPPDATA\Android",
+              "C:\vcpkg",
+              "C:\Program Files\dotnet",
+              "C:\SeleniumWebDrivers",
+              "C:\hostedtoolcache\windows\Java*",
+              "C:\hostedtoolcache\windows\go*",
+              "C:\hostedtoolcache\windows\Ruby*",
+              "C:\hostedtoolcache\windows\CodeQL*",
+              "C:\ProgramData\DockerDesktop",
+              "C:\Users\runneradmin\.dotnet",
+              "C:\Users\runneradmin\.gradle",
+              "C:\Users\runneradmin\.m2"
+          )
+
+          foreach ($p in $paths) {
+              if (Test-Path $p) {
+                  Write-Host "Removing $p ..."
+                  Remove-Item -Recurse -Force $p -ErrorAction SilentlyContinue
+              }
+          }
+
+          Clear-RecycleBin -Force -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "$env:TEMP\*" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\Windows\Temp\*" -ErrorAction SilentlyContinue
+
+          Write-Host "=== Free space AFTER cleanup ==="
+          Get-PSDrive -PSProvider FileSystem
 
       - name: Prepare directories.
         run: |
